@@ -17,15 +17,14 @@ RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
-COPY app ./app
-COPY models ./models
-COPY app/final_merged_career_guidance.csv ./app/final_merged_career_guidance.csv
+COPY . .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PORT=8080
 
 # Expose the port FastAPI will run on
 EXPOSE 8080
 
-# Command to start FastAPI
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--reload"]
+# Command to start FastAPI (remove --reload for production)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
