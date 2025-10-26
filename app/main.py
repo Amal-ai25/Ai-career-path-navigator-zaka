@@ -93,3 +93,6 @@ async def predict(
     except Exception as e:
         print(f"❌ Error in predict endpoint: {e}")
         return JSONResponse({"success": False, "error": str(e)})
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port)
