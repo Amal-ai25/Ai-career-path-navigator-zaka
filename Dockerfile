@@ -19,12 +19,14 @@ COPY app/final_merged_career_guidance.csv ./app/final_merged_career_guidance.csv
 #COPY .env .env
 
 # Expose FastAPI port
-EXPOSE 8000
+EXPOSE 8080
+
 
 # Set environment variables (Render overrides these automatically)
 ENV PYTHONUNBUFFERED=1
 
 # Command to start the FastAPI server
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+
 
 
