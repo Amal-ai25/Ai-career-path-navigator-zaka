@@ -91,7 +91,7 @@ class CareerCompassWeaviate:
         return self.embedding_model
 
     def initialize_system(self, data_path):
-        """Initialize the RAG system"""
+        """Initialize the complete RAG system"""
         logger.info("🚀 Initializing Career Compass RAG...")
 
         # Connect to Weaviate
@@ -172,22 +172,77 @@ class CareerCompassWeaviate:
             return False
 
     def ask_question(self, question):
-        """Simple RAG without complex features"""
+        """Real RAG with OpenAI"""
         try:
-            if not self.is_initialized:
-                return {"answer": "Career guidance system is starting up. Please try again in a moment.", "confidence": "Low"}
+            if not self.client or not self.is_initialized:
+                return {"answer": "Career guidance system is currently unavailable. Please try again later.", "confidence": "Error"}
 
-            # For now, return simple responses
+            logger.info(f"🤔 Processing question: {question}")
+
+            # Generate embedding for the question
+            embedding_model = self._get_embedding_model()
+            question_embedding = embedding_model.encode(question).tolist()
+
+            # Search in Weaviate
+            response = (
+                self.client.query
+                .get("CareerKnowledge", ["question", "answer", "source"])
+                .with_near_vector({"vector": question_embedding})
+                .with_limit(5)
+                .do()
+            )
+
+            if "data" not in response or not response["data"]["Get"]["CareerKnowledge"]:
+                return {"answer": "I don't have enough information to answer that question. Please try asking about career paths, skills, or educational requirements.", "confidence": "Low"}
+
+            chunks = response["data"]["Get"]["CareerKnowledge"]
+            context = "\n".join([chunk["answer"] for chunk in chunks])
+            logger.info(f"🔍 Retrieved {len(chunks)} relevant chunks")
+
+            # Construct RAG prompt
+            prompt = f"""
+            You are Career Compass, a helpful career guidance assistant.
+
+            Use the following context to answer the question. If the context doesn't contain relevant information, say so.
+
+            Context:
+            {context}
+
+            Question: {question}
+
+            Provide a helpful, career-focused answer based on the context:
+            """
+
+            # Call LLM
+            llm_response = self.llm_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=300
+            )
+
+            final_answer = llm_response.choices[0].message.content.strip()
+            
+            logger.info(f"💡 Generated answer with {len(final_answer)} characters")
+            
             return {
-                "answer": "Career guidance AI is currently being upgraded. Please check back in a few minutes for enhanced career advice and major recommendations!",
-                "confidence": "Medium"
+                "answer": final_answer,
+                "retrieved_chunks": len(chunks),
+                "confidence": "High"
             }
 
         except Exception as e:
             logger.error(f"❌ Error in ask_question: {e}")
-            return {"answer": "Service temporarily unavailable.", "confidence": "Error"}
+            return {"answer": "Sorry, I'm having trouble processing your question right now. Please try again.", "confidence": "Error"}
 
     def close_connection(self):
         """Close connection"""
         if self.client:
             logger.info("🔌 Connection closed")
+
+if __name__ == "__main__":
+    system = CareerCompassWeaviate()
+    if system.initialize_system("app/final_merged_career_guidance.csv"):
+        response = system.ask_question("What skills are important for AI engineers?")
+        print("💡 Answer:", response["answer"])
+    system.close_connection()
