@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import weaviate
 from sentence_transformers import SentenceTransformer
-from openai import OpenAI
+import openai
 import logging
 from dotenv import load_dotenv
 
@@ -16,8 +16,15 @@ class CareerCompassWeaviate:
     def __init__(self):
         self.client = None
         self.embedding_model = None
-        self.llm_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.is_initialized = False
+        
+        # Initialize OpenAI with compatible method
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if openai_api_key:
+            openai.api_key = openai_api_key
+            logger.info("✅ OpenAI client configured")
+        else:
+            logger.error("❌ OpenAI API key not found")
     
     def _initialize_weaviate_client(self):
         """Initialize connection to Weaviate Cloud"""
@@ -31,13 +38,10 @@ class CareerCompassWeaviate:
 
             logger.info(f"🔗 Connecting to Weaviate Cloud: {cluster_url}")
             
-            # CORRECT Weaviate v3 connection method
+            # Weaviate v3 connection
             self.client = weaviate.Client(
                 url=cluster_url,
-                auth_client_secret=weaviate.AuthApiKey(api_key=api_key),
-                additional_headers={
-                    "X-OpenAI-Api-Key": os.getenv("OPENAI_API_KEY")
-                }
+                auth_client_secret=weaviate.AuthApiKey(api_key=api_key)
             )
 
             # Test connection
@@ -253,15 +257,15 @@ class CareerCompassWeaviate:
             Provide a helpful, career-focused answer based on the context:
             """
 
-            # Generate answer using OpenAI
-            llm_response = self.llm_client.chat.completions.create(
-                model="gpt-4o-mini",
+            # Generate answer using OpenAI (compatible version)
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=300
             )
 
-            final_answer = llm_response.choices[0].message.content.strip()
+            final_answer = response.choices[0].message.content.strip()
             
             logger.info(f"💡 Generated answer with {len(final_answer)} characters")
             
