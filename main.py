@@ -51,10 +51,15 @@ async def startup_event():
     logger.info(f"📂 Current directory: {os.getcwd()}")
     logger.info(f"📂 Root contents: {os.listdir('.')}")
     
-    if os.path.exists('models'):
-        logger.info(f"📁 Models directory contents: {os.listdir('models')}")
+    # Check nested models directory
+    nested_models_path = "models/models"
+    if os.path.exists(nested_models_path):
+        logger.info(f"📁 Nested models directory contents: {os.listdir(nested_models_path)}")
     else:
-        logger.error("❌ Models directory not found!")
+        logger.error(f"❌ Nested models directory not found: {nested_models_path}")
+        # Show what we have
+        if os.path.exists('models'):
+            logger.info(f"📂 models/ contents: {os.listdir('models')}")
     
     # Load ML models first
     if predict_major:
@@ -62,9 +67,9 @@ async def startup_event():
             from app.utils.ml_utils import load_models
             ml_loaded = load_models()
             if ml_loaded:
-                logger.info("✅ ML models loaded successfully")
+                logger.info("✅ ML models loaded successfully from models/models/")
             else:
-                logger.error("❌ Failed to load ML models")
+                logger.error("❌ Failed to load ML models from models/models/")
         except Exception as e:
             logger.error(f"❌ Error loading ML models: {e}")
             import traceback
@@ -178,12 +183,13 @@ async def debug_models():
     import glob
     models_info = {}
     
-    # Check models directory
-    if os.path.exists("models"):
-        model_files = glob.glob("models/*.pkl")
+    # Check nested models directory
+    nested_path = "models/models"
+    if os.path.exists(nested_path):
+        model_files = glob.glob(f"{nested_path}/*.pkl")
         models_info["model_files"] = model_files
         models_info["models_dir_exists"] = True
-        models_info["models_dir_path"] = os.path.abspath("models")
+        models_info["models_dir_path"] = os.path.abspath(nested_path)
     else:
         models_info["models_dir_exists"] = False
         models_info["model_files"] = []
@@ -192,9 +198,12 @@ async def debug_models():
     # Check if ML function is available
     models_info["predict_major_available"] = predict_major is not None
     
-    # Check current directory
+    # Check current directory structure
     models_info["current_directory"] = os.getcwd()
     models_info["root_contents"] = os.listdir('.')
+    
+    if os.path.exists('models'):
+        models_info["models_root_contents"] = os.listdir('models')
     
     return JSONResponse(models_info)
 
