@@ -9,24 +9,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Initialize services
 career_system = None
 predict_major = None
 
-# Try to import dependencies with error handling
+# Import ML utils
 try:
-    from app.utils.ml_utils import predict_major
+    from app.utils.ml_utils import predict_major, load_models
     logger.info("✅ ML utils imported")
 except Exception as e:
     logger.error(f"❌ Failed to import ML utils: {e}")
     predict_major = None
 
+# Import RAG engine
 try:
     from app.rag_engine import CareerCompassWeaviate
     logger.info("✅ RAG engine imported")
@@ -34,7 +33,7 @@ except Exception as e:
     logger.error(f"❌ Failed to import RAG engine: {e}")
     CareerCompassWeaviate = None
 
-# Configure static files and templates
+# Static files
 try:
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
     templates = Jinja2Templates(directory="app/templates")
@@ -48,35 +47,49 @@ async def startup_event():
     global career_system
     logger.info("🚀 Starting Career Compass services...")
     
+    # Debug: Show current directory structure
+    logger.info(f"📂 Current directory: {os.getcwd()}")
+    logger.info(f"📂 Root contents: {os.listdir('.')}")
+    
+    if os.path.exists('models'):
+        logger.info(f"📁 Models directory contents: {os.listdir('models')}")
+    else:
+        logger.error("❌ Models directory not found!")
+    
+    # Load ML models first
+    if predict_major:
+        try:
+            from app.utils.ml_utils import load_models
+            ml_loaded = load_models()
+            if ml_loaded:
+                logger.info("✅ ML models loaded successfully")
+            else:
+                logger.error("❌ Failed to load ML models")
+        except Exception as e:
+            logger.error(f"❌ Error loading ML models: {e}")
+            import traceback
+            logger.error(f"🔍 ML loading traceback: {traceback.format_exc()}")
+    
+    # Initialize RAG system
     if CareerCompassWeaviate:
         try:
             career_system = CareerCompassWeaviate()
             logger.info("✅ Career system instance created")
             
-            # SIMPLIFIED path detection - only check the main path
             main_path = "app/final_merged_career_guidance.csv"
-            full_path = os.path.abspath(main_path)
             
-            if os.path.exists(full_path):
-                logger.info(f"📁 Found dataset at: {full_path}")
-                logger.info(f"📊 File size: {os.path.getsize(full_path)} bytes")
-                
-                success = career_system.initialize_system(full_path)
+            if os.path.exists(main_path):
+                logger.info(f"📁 Found dataset at: {main_path}")
+                success = career_system.initialize_system(main_path)
                 if success:
-                    logger.info("✅ Career Compass system initialized successfully")
+                    logger.info("✅ Career Compass RAG initialized successfully!")
                 else:
-                    logger.error("❌ Career Compass system initialization failed")
+                    logger.error("❌ RAG initialization failed")
             else:
-                logger.error(f"❌ Dataset not found at: {full_path}")
-                # Show available files for debugging
-                current_dir = os.getcwd()
-                logger.info(f"📂 Current directory: {current_dir}")
-                if os.path.exists('app'):
-                    app_files = os.listdir('app')
-                    logger.info(f"📂 Files in app directory: {app_files}")
+                logger.error(f"❌ Dataset not found at: {main_path}")
                     
         except Exception as e:
-            logger.error(f"❌ Error initializing Career Compass system: {e}")
+            logger.error(f"❌ Error initializing Career Compass: {e}")
             import traceback
             logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
     else:
@@ -132,7 +145,6 @@ async def predict(
             "passion_text": passion
         }
         result = predict_major(user_data)
-        result["success"] = "error" not in result
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in predict: {e}")
@@ -142,42 +154,49 @@ async def predict(
 async def health():
     dataset_exists = os.path.exists("app/final_merged_career_guidance.csv")
     rag_ready = career_system is not None and hasattr(career_system, 'is_initialized') and career_system.is_initialized
+    
+    # Check if ML models are loaded
+    ml_ready = False
+    try:
+        from app.utils.ml_utils import model
+        ml_ready = model is not None
+    except:
+        pass
 
     return {
         "status": "healthy",
         "service": "Career Compass",
-        "ml_ready": predict_major is not None,
+        "ml_ready": ml_ready,
         "rag_ready": rag_ready,
         "dataset_available": dataset_exists,
         "port": 8080
     }
 
-@app.get("/debug/rag-code")
-async def debug_rag_code():
-    """Debug endpoint to check the actual RAG engine code"""
-    try:
-        with open("app/rag_engine.py", "r") as f:
-            content = f.read()
-        
-        # Check which connection method is being used
-        uses_connect_to_weaviate_cloud = "connect_to_weaviate_cloud" in content
-        uses_weaviate_client = "weaviate.Client" in content
-        
-        # Get first few lines for verification
-        lines = content.split('\n')[:50]
-        
-        return JSONResponse({
-            "uses_connect_to_weaviate_cloud": uses_connect_to_weaviate_cloud,
-            "uses_weaviate_client": uses_weaviate_client,
-            "first_50_lines": lines,
-            "file_exists": True
-        })
-    except Exception as e:
-        return JSONResponse({"error": str(e), "file_exists": False})
-
-@app.get("/test")
-async def test():
-    return {"message": "Server is running!", "timestamp": "now"}
+@app.get("/debug/models")
+async def debug_models():
+    """Debug endpoint to check model files"""
+    import glob
+    models_info = {}
+    
+    # Check models directory
+    if os.path.exists("models"):
+        model_files = glob.glob("models/*.pkl")
+        models_info["model_files"] = model_files
+        models_info["models_dir_exists"] = True
+        models_info["models_dir_path"] = os.path.abspath("models")
+    else:
+        models_info["models_dir_exists"] = False
+        models_info["model_files"] = []
+        models_info["models_dir_path"] = "Not found"
+    
+    # Check if ML function is available
+    models_info["predict_major_available"] = predict_major is not None
+    
+    # Check current directory
+    models_info["current_directory"] = os.getcwd()
+    models_info["root_contents"] = os.listdir('.')
+    
+    return JSONResponse(models_info)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
