@@ -25,14 +25,14 @@ all_passions = None
 all_work_styles = None
 
 def load_models():
-    """Load all ML models and encoders from root models directory"""
+    """Load all ML models and encoders from nested models/models/ directory"""
     global model, mlb_skills, mlb_courses, ohe_work_style, ohe_passion
     global le_major, le_faculty, le_degree, le_campus
     global all_skills, all_courses, all_passions, all_work_styles
     
     try:
-        # Models are in root models/ directory (Ai-career-path-navigator-zaka/models/)
-        models_dir = "models"
+        # Models are in nested models/models/ directory 
+        models_dir = "models/models"
         
         logger.info(f"📁 Loading models from: {os.path.abspath(models_dir)}")
         
@@ -41,22 +41,40 @@ def load_models():
             logger.error(f"❌ Models directory not found: {models_dir}")
             logger.info(f"📂 Current directory: {os.getcwd()}")
             logger.info(f"📂 Directory contents: {os.listdir('.')}")
+            if os.path.exists('models'):
+                logger.info(f"📂 models/ contents: {os.listdir('models')}")
             return False
         
         # List available model files
         model_files = os.listdir(models_dir)
         logger.info(f"📄 Available model files: {model_files}")
         
-        # Load the main model
-        model_path = os.path.join(models_dir, "major_recommendation_model.pkl")
-        if os.path.exists(model_path):
-            model = joblib.load(model_path)
-            logger.info("✅ ML model loaded successfully")
-        else:
-            logger.error(f"❌ Model file not found: {model_path}")
+        # Required model files
+        required_files = [
+            "major_recommendation_model.pkl",
+            "mlb_skills.pkl", "mlb_courses.pkl",
+            "ohe_work_style.pkl", "ohe_passion.pkl", 
+            "le_major.pkl", "le_faculty.pkl", "le_degree.pkl", "le_campus.pkl",
+            "master_skills.pkl", "master_courses.pkl", 
+            "master_passions.pkl", "master_work_styles.pkl"
+        ]
+        
+        # Check if all required files exist
+        missing_files = []
+        for file in required_files:
+            if not os.path.exists(os.path.join(models_dir, file)):
+                missing_files.append(file)
+        
+        if missing_files:
+            logger.error(f"❌ Missing model files: {missing_files}")
             return False
         
-        # Load encoders
+        # Load the main model
+        model_path = os.path.join(models_dir, "major_recommendation_model.pkl")
+        model = joblib.load(model_path)
+        logger.info("✅ ML model loaded successfully")
+        
+        # Load all encoders and master lists
         encoders_to_load = {
             'mlb_skills': 'mlb_skills.pkl',
             'mlb_courses': 'mlb_courses.pkl', 
@@ -74,25 +92,15 @@ def load_models():
         
         for var_name, file_name in encoders_to_load.items():
             file_path = os.path.join(models_dir, file_name)
-            if os.path.exists(file_path):
-                try:
-                    if var_name.startswith('mlb_'):
-                        globals()[var_name] = joblib.load(file_path)
-                    elif var_name.startswith('ohe_'):
-                        globals()[var_name] = joblib.load(file_path)
-                    elif var_name.startswith('le_'):
-                        globals()[var_name] = joblib.load(file_path)
-                    elif var_name.startswith('master_'):
-                        globals()[var_name] = joblib.load(file_path)
-                    logger.info(f"✅ Loaded {var_name} from {file_name}")
-                except Exception as e:
-                    logger.error(f"❌ Error loading {file_name}: {e}")
-                    return False
-            else:
-                logger.error(f"❌ Model file not found: {file_path}")
+            try:
+                loaded_obj = joblib.load(file_path)
+                globals()[var_name] = loaded_obj
+                logger.info(f"✅ Loaded {var_name} from {file_name}")
+            except Exception as e:
+                logger.error(f"❌ Error loading {file_name}: {e}")
                 return False
         
-        logger.info("✅ All ML components loaded successfully")
+        logger.info("🎉 All ML components loaded successfully!")
         return True
         
     except Exception as e:
@@ -217,5 +225,5 @@ def predict_major(user_data):
         return {"error": f"Prediction failed: {str(e)}", "success": False}
 
 # Load models when module is imported
-logger.info("🔄 Attempting to load ML models...")
+logger.info("🔄 Attempting to load ML models from models/models/...")
 load_models()
