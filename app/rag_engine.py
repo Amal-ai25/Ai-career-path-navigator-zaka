@@ -27,7 +27,6 @@ class CareerCompassWeaviate:
             api_key = os.getenv("WEAVIATE_API_KEY")
 
             logger.info(f"🔗 Connecting to Weaviate Cloud: {cluster_url}")
-            logger.info(f"📂 Current working directory: {os.getcwd()}")
             
             self.client = weaviate.connect_to_weaviate_cloud(
                 cluster_url=cluster_url,
@@ -49,7 +48,7 @@ class CareerCompassWeaviate:
         try:
             class_name = "CareerKnowledge"
             
-            # Check if collection exists using Weaviate 4.x method
+            # Check if collection exists
             if self.client.collections.exists(class_name):
                 logger.info("✅ Schema already exists")
                 return True
@@ -74,19 +73,6 @@ class CareerCompassWeaviate:
         if self.embedding_model is None:
             self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
         return self.embedding_model
-
-    def _split_text_into_chunks(self, text, chunk_size=200, chunk_overlap=20):
-        """Simple text chunking without langchain"""
-        words = text.split()
-        chunks = []
-        
-        for i in range(0, len(words), chunk_size - chunk_overlap):
-            chunk = ' '.join(words[i:i + chunk_size])
-            chunks.append(chunk)
-            if i + chunk_size >= len(words):
-                break
-                
-        return chunks
 
     def initialize_system(self, data_path):
         """Initialize the complete RAG system"""
