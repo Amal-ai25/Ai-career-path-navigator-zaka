@@ -9,27 +9,32 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Import from app folder
+# Initialize services
+career_system = None
+predict_major = None
+
+# Try to import dependencies with error handling
 try:
     from app.utils.ml_utils import predict_major
     logger.info("✅ ML utils imported")
 except Exception as e:
-    logger.error(f"❌ ML utils import failed: {e}")
+    logger.error(f"❌ Failed to import ML utils: {e}")
     predict_major = None
 
 try:
     from app.rag_engine import CareerCompassWeaviate
     logger.info("✅ RAG engine imported")
 except Exception as e:
-    logger.error(f"❌ RAG engine import failed: {e}")
+    logger.error(f"❌ Failed to import RAG engine: {e}")
     CareerCompassWeaviate = None
 
-# Mount static files from app folder
+# Configure static files and templates
 try:
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
     templates = Jinja2Templates(directory="app/templates")
@@ -38,37 +43,53 @@ except Exception as e:
     logger.error(f"❌ Static files error: {e}")
     templates = None
 
-career_system = None
-
 @app.on_event("startup")
 async def startup_event():
     global career_system
-    logger.info("🚀 Starting services...")
+    logger.info("🚀 Starting Career Compass services...")
     
     if CareerCompassWeaviate:
         try:
             career_system = CareerCompassWeaviate()
-            csv_path = "final_merged_career_guidance.csv"
-            if os.path.exists(csv_path):
-                success = career_system.initialize_system(csv_path)
-                if success:
-                    logger.info("✅ System initialized")
+            logger.info("✅ Career system instance created")
+            
+            # Try multiple dataset paths - CSV is in app folder
+            dataset_paths = [
+                "app/final_merged_career_guidance.csv",  # Main path - CSV in app folder
+                "./app/final_merged_career_guidance.csv",
+                "final_merged_career_guidance.csv",
+                "./final_merged_career_guidance.csv"
+            ]
+            
+            dataset_found = False
+            for path in dataset_paths:
+                if os.path.exists(path):
+                    logger.info(f"📁 Found dataset at: {path}")
+                    success = career_system.initialize_system(path)
+                    if success:
+                        logger.info("✅ Career Compass system initialized successfully")
+                        dataset_found = True
+                        break
+                    else:
+                        logger.error(f"❌ Failed to initialize with {path}")
                 else:
-                    logger.error("❌ System init failed")
-            else:
-                logger.error(f"❌ Dataset not found: {csv_path}")
+                    logger.warning(f"📁 Dataset not found at: {path}")
+            
+            if not dataset_found:
+                logger.error("❌ No dataset found in any location. Chat features will be disabled.")
+                
         except Exception as e:
-            logger.error(f"❌ Startup error: {e}")
+            logger.error(f"❌ Error initializing Career Compass system: {e}")
+    else:
+        logger.error("❌ CareerCompassWeaviate not available")
 
 @app.get("/")
 async def home(request: Request):
     if templates:
-        work_styles = ["Team-Oriented","Remote","On-site","Office/Data","Hands-on/Field","Lab/Research","Creative/Design","People-centric/Teaching","Business","freelance"]
+        work_styles = ["Team-Oriented","Remote", "On-site","Office/Data", "Hands-on/Field","Lab/Research","Creative/Design", "People-centric/Teaching", "Business", "freelance"]
         return templates.TemplateResponse("index.html", {"request": request, "work_styles": work_styles})
     else:
-        return HTMLResponse("<h1>Career Compass</h1><p>Service starting...</p>")
-
-# ... rest of your routes remain the same
+        return HTMLResponse("<h1>Career Compass</h1><p>Service starting up...</p>")
 
 @app.post("/ask")
 async def ask_question(data: dict):
@@ -118,18 +139,24 @@ async def predict(
         logger.error(f"Error in predict: {e}")
         return JSONResponse({"success": False, "error": str(e)})
 
-# Health check endpoint for Render
 @app.get("/health")
 async def health():
+    # Check if dataset exists in app folder
+    dataset_exists = os.path.exists("app/final_merged_career_guidance.csv")
+    
     return {
         "status": "healthy",
         "service": "Career Compass",
         "ml_ready": predict_major is not None,
-        "rag_ready": career_system is not None
+        "rag_ready": career_system is not None,
+        "dataset_available": dataset_exists,
+        "port": 8080
     }
 
 @app.get("/test")
 async def test():
     return {"message": "Server is running!", "timestamp": "now"}
 
-# Render runs this automatically - no need for __main__ block
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
