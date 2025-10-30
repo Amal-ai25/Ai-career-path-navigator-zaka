@@ -80,6 +80,7 @@ class CareerCompassWeaviate:
     def _get_embedding_model(self):
         if self.embedding_model is None:
             try:
+                logger.info("🔄 Loading embedding model...")
                 self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
                 logger.info("✅ Embedding model loaded")
             except Exception as e:
@@ -88,7 +89,7 @@ class CareerCompassWeaviate:
         return self.embedding_model
 
     def initialize_system(self, data_path):
-        """Initialize the complete RAG system without langchain-weaviate"""
+        """Initialize the complete RAG system"""
         logger.info("🚀 Initializing Career Compass RAG...")
 
         # Step 1: Connect to Weaviate
@@ -122,7 +123,7 @@ class CareerCompassWeaviate:
         try:
             collection = self.client.collections.get("CareerKnowledge")
             
-            batch_size = 20
+            batch_size = 50
             successful_inserts = 0
             
             for i in range(0, len(df), batch_size):
@@ -147,15 +148,16 @@ class CareerCompassWeaviate:
                             "vector": embedding
                         })
                     except Exception as e:
-                        logger.warning(f"⚠️ Failed to process row {_}: {e}")
-                        continue
+                        continue  # Skip failed rows
                 
                 if objects:
                     collection.data.insert_many(objects)
                     successful_inserts += len(objects)
-                    logger.info(f"📤 Added {min(i + batch_size, len(df))}/{len(df)} documents")
+                    
+                if (i // batch_size) % 10 == 0:
+                    logger.info(f"📤 Processed {min(i + batch_size, len(df))}/{len(df)} documents")
             
-            logger.info(f"✅ Successfully added {successful_inserts} documents")
+            logger.info(f"✅ Successfully added {successful_inserts}/{len(df)} documents")
             
             if successful_inserts > 0:
                 self.is_initialized = True
@@ -249,9 +251,32 @@ class CareerCompassWeaviate:
             self.client.close()
         logger.info("✅ Connection closed")
 
-if __name__ == "__main__":
+# Test function
+def test_rag_system():
+    """Test the RAG system"""
     system = CareerCompassWeaviate()
-    if system.initialize_system("app/final_merged_career_guidance.csv"):
+    
+    dataset_paths = [
+        "app/final_merged_career_guidance.csv",
+        "./app/final_merged_career_guidance.csv", 
+    ]
+    
+    initialized = False
+    for path in dataset_paths:
+        if os.path.exists(path):
+            logger.info(f"📁 Testing with dataset: {path}")
+            if system.initialize_system(path):
+                initialized = True
+                break
+    
+    if initialized:
+        # Test a question
         response = system.ask_question("What skills are important for AI engineers?")
-        print("💡 Answer:", response["answer"])
+        logger.info(f"💡 Test Answer: {response['answer']}")
+    else:
+        logger.error("❌ Could not initialize RAG system")
+    
     system.close_connection()
+
+if __name__ == "__main__":
+    test_rag_system()
