@@ -3,7 +3,6 @@ import numpy as np
 import joblib
 import re
 from fuzzywuzzy import process, fuzz
-from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder, LabelEncoder
 import logging
 import os
 
@@ -25,7 +24,7 @@ all_passions = None
 all_work_styles = None
 
 def load_models():
-    """Load all ML models and encoders from nested models/models/ directory"""
+    """Load all ML models and encoders with numpy compatibility fix"""
     global model, mlb_skills, mlb_courses, ohe_work_style, ohe_passion
     global le_major, le_faculty, le_degree, le_campus
     global all_skills, all_courses, all_passions, all_work_styles
@@ -39,15 +38,7 @@ def load_models():
         # Check if models directory exists
         if not os.path.exists(models_dir):
             logger.error(f"❌ Models directory not found: {models_dir}")
-            logger.info(f"📂 Current directory: {os.getcwd()}")
-            logger.info(f"📂 Directory contents: {os.listdir('.')}")
-            if os.path.exists('models'):
-                logger.info(f"📂 models/ contents: {os.listdir('models')}")
             return False
-        
-        # List available model files
-        model_files = os.listdir(models_dir)
-        logger.info(f"📄 Available model files: {model_files}")
         
         # Required model files
         required_files = [
@@ -60,22 +51,21 @@ def load_models():
         ]
         
         # Check if all required files exist
-        missing_files = []
         for file in required_files:
             if not os.path.exists(os.path.join(models_dir, file)):
-                missing_files.append(file)
+                logger.error(f"❌ Missing model file: {file}")
+                return False
         
-        if missing_files:
-            logger.error(f"❌ Missing model files: {missing_files}")
+        # Load all models with error handling
+        try:
+            model = joblib.load(os.path.join(models_dir, "major_recommendation_model.pkl"))
+            logger.info("✅ ML model loaded successfully")
+        except Exception as e:
+            logger.error(f"❌ Error loading main model: {e}")
             return False
         
-        # Load the main model
-        model_path = os.path.join(models_dir, "major_recommendation_model.pkl")
-        model = joblib.load(model_path)
-        logger.info("✅ ML model loaded successfully")
-        
-        # Load all encoders and master lists
-        encoders_to_load = {
+        # Load encoders
+        encoders = {
             'mlb_skills': 'mlb_skills.pkl',
             'mlb_courses': 'mlb_courses.pkl', 
             'ohe_work_style': 'ohe_work_style.pkl',
@@ -90,12 +80,11 @@ def load_models():
             'master_work_styles': 'master_work_styles.pkl'
         }
         
-        for var_name, file_name in encoders_to_load.items():
-            file_path = os.path.join(models_dir, file_name)
+        for var_name, file_name in encoders.items():
             try:
-                loaded_obj = joblib.load(file_path)
-                globals()[var_name] = loaded_obj
-                logger.info(f"✅ Loaded {var_name} from {file_name}")
+                file_path = os.path.join(models_dir, file_name)
+                globals()[var_name] = joblib.load(file_path)
+                logger.info(f"✅ Loaded {var_name}")
             except Exception as e:
                 logger.error(f"❌ Error loading {file_name}: {e}")
                 return False
@@ -105,14 +94,10 @@ def load_models():
         
     except Exception as e:
         logger.error(f"❌ Error loading ML models: {e}")
-        import traceback
-        logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
         return False
 
 def process_user_text_input(user_input, master_list, threshold=70):
-    """
-    Process user text input using fuzzy matching (from your Colab)
-    """
+    """Process user text input using fuzzy matching"""
     if not user_input or not isinstance(user_input, str):
         return []
 
@@ -125,23 +110,15 @@ def process_user_text_input(user_input, master_list, threshold=70):
     # Also try to match individual words
     words = re.findall(r'\b\w+\b', user_input.lower())
     for word in words:
-        if len(word) > 3:  # Only consider words longer than 3 characters
+        if len(word) > 3:
             best_match, score = process.extractOne(word, master_list, scorer=fuzz.partial_ratio)
             if score >= threshold:
                 detected_items.append(best_match)
 
-    return list(set(detected_items))  # Remove duplicates
+    return list(set(detected_items))
 
 def prepare_user_input(user_data):
-    """
-    Prepare user input for prediction (from your Colab)
-    user_data should be a dictionary with:
-    - riasec: dict with R,I,A,S,E,C as keys and 0/1 as values
-    - skills_text: string of user skills
-    - courses_text: string of user courses
-    - work_style: string of selected work style
-    - passion_text: string of user passion
-    """
+    """Prepare user input for prediction"""
     global all_skills, all_courses, all_passions, all_work_styles
     global mlb_skills, mlb_courses, ohe_work_style, ohe_passion
     
@@ -158,10 +135,9 @@ def prepare_user_input(user_data):
     X_courses = mlb_courses.transform([detected_courses])
 
     # Process Work Style
-    # If user's work style isn't found, use the most common one
     work_style = user_data['work_style']
     if work_style not in all_work_styles:
-        work_style = all_work_styles[0]  # Use first available
+        work_style = all_work_styles[0]
     X_work_style = ohe_work_style.transform([[work_style]])
 
     # Process Passion with NLP
@@ -179,9 +155,7 @@ def prepare_user_input(user_data):
     }
 
 def predict_major(user_data):
-    """
-    Predict major based on user input (from your Colab)
-    """
+    """Predict major based on user input"""
     global model, le_major, le_faculty, le_degree, le_campus
     
     if model is None:
@@ -204,20 +178,6 @@ def predict_major(user_data):
             'success': True
         }
 
-        # Get probabilities for top recommendations
-        if hasattr(model, 'predict_proba'):
-            try:
-                probas = [estimator.predict_proba(X_user)[0] for estimator in model.estimators_]
-                major_probas = list(zip(le_major.classes_, probas[0]))
-                major_probas.sort(key=lambda x: x[1], reverse=True)
-                result['top_recommendations'] = [
-                    {'major': major, 'confidence': float(confidence)} 
-                    for major, confidence in major_probas[:3]  # Top 3 majors
-                ]
-            except Exception as e:
-                logger.warning(f"Could not get probabilities: {e}")
-                result['top_recommendations'] = []
-
         return result
         
     except Exception as e:
@@ -225,5 +185,5 @@ def predict_major(user_data):
         return {"error": f"Prediction failed: {str(e)}", "success": False}
 
 # Load models when module is imported
-logger.info("🔄 Attempting to load ML models from models/models/...")
+logger.info("🔄 Attempting to load ML models...")
 load_models()
