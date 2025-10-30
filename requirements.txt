@@ -9,13 +9,13 @@ python-dotenv==1.0.0
 openai==1.3.0
 weaviate-client==4.4.0
 
-# Data processing
+# Data processing - COMPATIBLE VERSIONS
 pandas==2.1.4
 numpy==1.26.0
-scikit-learn==1.3.2
+scikit-learn==1.6.1
 joblib==1.3.2
 
-# Text processing - minimal
+# Text processing
 sentence-transformers==2.2.2
 transformers==4.35.2
 torch==2.0.1
