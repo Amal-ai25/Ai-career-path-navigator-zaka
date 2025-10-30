@@ -5,97 +5,201 @@ from fastapi.templating import Jinja2Templates
 import logging
 import os
 import uvicorn
+from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO)
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Import fallback ML function
+career_system = None
+predict_major = None
+
+# Import ML utils
 try:
-    from app.utils.ml_utils import predict_major
-    logger.info("✅ ML fallback imported")
-except:
+    from app.utils.ml_utils import predict_major, load_models
+    logger.info("✅ ML utils imported")
+except Exception as e:
+    logger.error(f"❌ Failed to import ML utils: {e}")
     predict_major = None
 
 # Import RAG engine
 try:
     from app.rag_engine import CareerCompassWeaviate
-    career_system = CareerCompassWeaviate()
     logger.info("✅ RAG engine imported")
 except Exception as e:
-    logger.error(f"❌ RAG import failed: {e}")
-    career_system = None
+    logger.error(f"❌ Failed to import RAG engine: {e}")
+    CareerCompassWeaviate = None
 
-# Static files
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-templates = Jinja2Templates(directory="app/templates")
+# Configure static files and templates
+try:
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
+    templates = Jinja2Templates(directory="app/templates")
+    logger.info("✅ Static files configured")
+except Exception as e:
+    logger.error(f"❌ Static files error: {e}")
+    templates = None
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("🚀 Starting Career Compass...")
+    global career_system
+    logger.info("🚀 Starting Career Compass services...")
     
-    if career_system:
+    # Debug: Show current directory structure
+    logger.info(f"📂 Current directory: {os.getcwd()}")
+    logger.info(f"📂 Root contents: {os.listdir('.')}")
+    
+    # Check nested models directory
+    nested_models_path = "models/models"
+    if os.path.exists(nested_models_path):
+        logger.info(f"📁 Nested models directory contents: {os.listdir(nested_models_path)}")
+    else:
+        logger.error(f"❌ Nested models directory not found: {nested_models_path}")
+        # Show what we have
+        if os.path.exists('models'):
+            logger.info(f"📂 models/ contents: {os.listdir('models')}")
+    
+    # Load ML models first
+    if predict_major:
         try:
-            dataset_path = "app/final_merged_career_guidance.csv"
-            if os.path.exists(dataset_path):
-                career_system.initialize_system(dataset_path)
-                logger.info("✅ RAG system initialized")
+            from app.utils.ml_utils import load_models
+            ml_loaded = load_models()
+            if ml_loaded:
+                logger.info("✅ ML models loaded successfully from models/models/")
             else:
-                logger.error("❌ Dataset not found")
+                logger.error("❌ Failed to load ML models from models/models/")
         except Exception as e:
-            logger.error(f"❌ Startup error: {e}")
+            logger.error(f"❌ Error loading ML models: {e}")
+            import traceback
+            logger.error(f"🔍 ML loading traceback: {traceback.format_exc()}")
+    
+    # Initialize RAG system
+    if CareerCompassWeaviate:
+        try:
+            career_system = CareerCompassWeaviate()
+            logger.info("✅ Career system instance created")
+            
+            main_path = "app/final_merged_career_guidance.csv"
+            
+            if os.path.exists(main_path):
+                logger.info(f"📁 Found dataset at: {main_path}")
+                success = career_system.initialize_system(main_path)
+                if success:
+                    logger.info("✅ Career Compass RAG initialized successfully!")
+                else:
+                    logger.error("❌ RAG initialization failed")
+            else:
+                logger.error(f"❌ Dataset not found at: {main_path}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Error initializing Career Compass: {e}")
+            import traceback
+            logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
+    else:
+        logger.error("❌ CareerCompassWeaviate not available")
 
 @app.get("/")
 async def home(request: Request):
-    work_styles = ["Team-Oriented","Remote", "On-site","Office/Data", "Hands-on/Field","Lab/Research","Creative/Design", "People-centric/Teaching", "Business", "freelance"]
-    return templates.TemplateResponse("index.html", {"request": request, "work_styles": work_styles})
+    if templates:
+        work_styles = ["Team-Oriented","Remote", "On-site","Office/Data", "Hands-on/Field","Lab/Research","Creative/Design", "People-centric/Teaching", "Business", "freelance"]
+        return templates.TemplateResponse("index.html", {"request": request, "work_styles": work_styles})
+    else:
+        return HTMLResponse("<h1>Career Compass</h1><p>Service starting up...</p>")
 
 @app.post("/ask")
 async def ask_question(data: dict):
     try:
-        if career_system and hasattr(career_system, 'is_initialized') and career_system.is_initialized:
-            response = career_system.ask_question(data.get("question", ""))
-            return {"answer": response["answer"]}
-        else:
-            return {"answer": "🤖 Career AI is currently upgrading! We're enhancing our career guidance system and will be back with improved recommendations shortly. Thank you for your patience!"}
-    except:
-        return {"answer": "Career guidance service is temporarily unavailable. Please try again later."}
+        if not career_system or not hasattr(career_system, 'is_initialized') or not career_system.is_initialized:
+            return {"answer": "Career guidance system is currently unavailable. Please try again later."}
+        
+        q = data.get("question", "").strip()
+        if not q:
+            return {"answer": "Please provide a question."}
+            
+        response = career_system.ask_question(q)
+        return {"answer": response["answer"]}
+    except Exception as e:
+        logger.error(f"Error in ask_question: {e}")
+        return {"answer": "Sorry, I'm having trouble processing your question right now."}
 
 @app.post("/predict")
 async def predict(
-    R: str = Form(None), I: str = Form(None), A: str = Form(None),
-    S: str = Form(None), E: str = Form(None), C: str = Form(None),
-    skills: str = Form(""), courses: str = Form(""),
-    work_style: str = Form(""), passion: str = Form("")
+    R: str = Form(None),
+    I: str = Form(None),
+    A: str = Form(None),
+    S: str = Form(None),
+    E: str = Form(None),
+    C: str = Form(None),
+    skills: str = Form(""),
+    courses: str = Form(""),
+    work_style: str = Form(""),
+    passion: str = Form("")
 ):
-    if predict_major:
-        try:
-            riasec = {k: bool(v) for k, v in zip("RIASEC", [R,I,A,S,E,C])}
-            user_data = {"riasec": riasec, "skills_text": skills, "courses_text": courses, "work_style": work_style, "passion_text": passion}
-            result = predict_major(user_data)
-            return JSONResponse(result)
-        except Exception as e:
-            return JSONResponse({"success": False, "error": str(e)})
-    else:
-        return JSONResponse({
-            "success": True,
-            "major": "Computer Science", 
-            "faculty": "Faculty of Engineering",
-            "degree": "Bachelor of Science",
-            "campus": "Main Campus",
-            "note": "ML system upgrading - sample recommendation"
-        })
+    if not predict_major:
+        return JSONResponse({"success": False, "error": "Prediction system is currently unavailable."})
+    
+    try:
+        riasec = {k: bool(v) for k, v in zip("RIASEC", [R,I,A,S,E,C])}
+        user_data = {
+            "riasec": riasec,
+            "skills_text": skills,
+            "courses_text": courses,
+            "work_style": work_style,
+            "passion_text": passion
+        }
+        result = predict_major(user_data)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Error in predict: {e}")
+        return JSONResponse({"success": False, "error": str(e)})
 
 @app.get("/health")
 async def health():
+    dataset_exists = os.path.exists("app/final_merged_career_guidance.csv")
+    rag_ready = career_system is not None and hasattr(career_system, 'is_initialized') and career_system.is_initialized
+    
+    # Check if ML models are loaded
+    ml_ready = False
+    try:
+        from app.utils.ml_utils import model
+        ml_ready = model is not None
+    except:
+        pass
+
     return {
         "status": "healthy",
         "service": "Career Compass",
-        "ml_ready": predict_major is not None,
-        "rag_ready": career_system is not None,
+        "ml_ready": ml_ready,
+        "rag_ready": rag_ready,
+        "dataset_available": dataset_exists,
         "port": 8080
     }
 
+@app.get("/debug/models")
+async def debug_models():
+    """Debug endpoint to check model files"""
+    import glob
+    models_info = {}
+    
+    # Check nested models directory
+    nested_path = "models/models"
+    if os.path.exists(nested_path):
+        model_files = glob.glob(f"{nested_path}/*.pkl")
+        models_info["model_files"] = model_files
+        models_info["models_dir_exists"] = True
+        models_info["models_dir_path"] = os.path.abspath(nested_path)
+    else:
+        models_info["models_dir_exists"] = False
+        models_info["model_files"] = []
+        models_info["models_dir_path"] = "Not found"
+    
+    # Check if ML function is available
+    models_info["predict_major_available"] = predict_major is not None
+    
+    return JSONResponse(models_info)
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
