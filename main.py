@@ -53,33 +53,53 @@ async def startup_event():
             career_system = CareerCompassWeaviate()
             logger.info("✅ Career system instance created")
             
-            # Try multiple dataset paths - CSV is in app folder
+            # Enhanced dataset path detection
             dataset_paths = [
-                "app/final_merged_career_guidance.csv",  # Main path - CSV in app folder
+                "app/final_merged_career_guidance.csv",  # Main expected path
                 "./app/final_merged_career_guidance.csv",
                 "final_merged_career_guidance.csv",
-                "./final_merged_career_guidance.csv"
+                "./final_merged_career_guidance.csv",
+                "/opt/render/project/src/app/final_merged_career_guidance.csv",  # Render absolute path
+                os.path.join(os.path.dirname(__file__), "app/final_merged_career_guidance.csv"),  # Absolute from main.py
             ]
             
             dataset_found = False
+            actual_path_used = None
+            
             for path in dataset_paths:
-                if os.path.exists(path):
-                    logger.info(f"📁 Found dataset at: {path}")
-                    success = career_system.initialize_system(path)
+                full_path = os.path.abspath(path)
+                if os.path.exists(full_path):
+                    logger.info(f"📁 Found dataset at: {full_path}")
+                    logger.info(f"📊 File size: {os.path.getsize(full_path)} bytes")
+                    success = career_system.initialize_system(full_path)
                     if success:
                         logger.info("✅ Career Compass system initialized successfully")
                         dataset_found = True
+                        actual_path_used = full_path
                         break
                     else:
-                        logger.error(f"❌ Failed to initialize with {path}")
+                        logger.error(f"❌ Failed to initialize with {full_path}")
                 else:
-                    logger.warning(f"📁 Dataset not found at: {path}")
+                    logger.warning(f"📁 Dataset not found at: {full_path}")
             
             if not dataset_found:
                 logger.error("❌ No dataset found in any location. Chat features will be disabled.")
+                # Debug: List all files to help diagnose
+                import glob
+                current_dir = os.getcwd()
+                logger.info(f"📂 Current working directory: {current_dir}")
+                logger.info(f"📂 Files in current directory: {os.listdir('.')}")
+                if os.path.exists('app'):
+                    logger.info(f"📂 Files in app directory: {os.listdir('app')}")
+                csv_files = glob.glob("**/*.csv", recursive=True)
+                logger.info(f"📁 All CSV files found: {csv_files}")
+            else:
+                logger.info(f"🎉 Using dataset from: {actual_path_used}")
                 
         except Exception as e:
             logger.error(f"❌ Error initializing Career Compass system: {e}")
+            import traceback
+            logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
     else:
         logger.error("❌ CareerCompassWeaviate not available")
 
@@ -141,17 +161,53 @@ async def predict(
 
 @app.get("/health")
 async def health():
-    # Check if dataset exists in app folder
-    dataset_exists = os.path.exists("app/final_merged_career_guidance.csv")
+    # Enhanced health check with better path detection
+    dataset_paths = [
+        "app/final_merged_career_guidance.csv",
+        "./app/final_merged_career_guidance.csv",
+        "/opt/render/project/src/app/final_merged_career_guidance.csv",
+    ]
     
+    dataset_exists = False
+    actual_path = None
+    for path in dataset_paths:
+        if os.path.exists(path):
+            dataset_exists = True
+            actual_path = path
+            break
+
     return {
         "status": "healthy",
         "service": "Career Compass",
         "ml_ready": predict_major is not None,
         "rag_ready": career_system is not None,
         "dataset_available": dataset_exists,
+        "dataset_path": actual_path,
         "port": 8080
     }
+
+@app.get("/debug/files")
+async def debug_files():
+    """Debug endpoint to check file structure"""
+    import glob
+    current_dir = os.getcwd()
+    
+    result = {
+        "current_working_dir": current_dir,
+        "files_in_root": os.listdir("."),
+        "app_directory_exists": os.path.exists("app"),
+        "files_in_app": os.listdir("app") if os.path.exists("app") else "app folder not found",
+        "all_csv_files": glob.glob("**/*.csv", recursive=True),
+        "dataset_exists": os.path.exists("app/final_merged_career_guidance.csv"),
+        "dataset_paths_checked": [
+            "app/final_merged_career_guidance.csv",
+            "./app/final_merged_career_guidance.csv", 
+            "final_merged_career_guidance.csv",
+            "./final_merged_career_guidance.csv",
+            "/opt/render/project/src/app/final_merged_career_guidance.csv"
+        ]
+    }
+    return JSONResponse(result)
 
 @app.get("/test")
 async def test():
