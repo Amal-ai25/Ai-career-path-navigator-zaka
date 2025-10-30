@@ -53,19 +53,13 @@ async def startup_event():
             career_system = CareerCompassWeaviate()
             logger.info("✅ Career system instance created")
             
-            # Enhanced dataset path detection
+            # Try dataset paths - stop when first one works
             dataset_paths = [
                 "app/final_merged_career_guidance.csv",  # Main expected path
                 "./app/final_merged_career_guidance.csv",
-                "final_merged_career_guidance.csv",
-                "./final_merged_career_guidance.csv",
-                "/opt/render/project/src/app/final_merged_career_guidance.csv",  # Render absolute path
-                os.path.join(os.path.dirname(__file__), "app/final_merged_career_guidance.csv"),  # Absolute from main.py
             ]
             
             dataset_found = False
-            actual_path_used = None
-            
             for path in dataset_paths:
                 full_path = os.path.abspath(path)
                 if os.path.exists(full_path):
@@ -75,27 +69,20 @@ async def startup_event():
                     if success:
                         logger.info("✅ Career Compass system initialized successfully")
                         dataset_found = True
-                        actual_path_used = full_path
                         break
                     else:
                         logger.error(f"❌ Failed to initialize with {full_path}")
-                else:
-                    logger.warning(f"📁 Dataset not found at: {full_path}")
+                        # Don't try other paths if this one exists but failed
+                        break
             
             if not dataset_found:
-                logger.error("❌ No dataset found in any location. Chat features will be disabled.")
-                # Debug: List all files to help diagnose
-                import glob
+                logger.error("❌ No dataset found. Chat features will be disabled.")
+                # Debug info
                 current_dir = os.getcwd()
                 logger.info(f"📂 Current working directory: {current_dir}")
-                logger.info(f"📂 Files in current directory: {os.listdir('.')}")
                 if os.path.exists('app'):
                     logger.info(f"📂 Files in app directory: {os.listdir('app')}")
-                csv_files = glob.glob("**/*.csv", recursive=True)
-                logger.info(f"📁 All CSV files found: {csv_files}")
-            else:
-                logger.info(f"🎉 Using dataset from: {actual_path_used}")
-                
+                    
         except Exception as e:
             logger.error(f"❌ Error initializing Career Compass system: {e}")
             import traceback
@@ -161,28 +148,14 @@ async def predict(
 
 @app.get("/health")
 async def health():
-    # Enhanced health check with better path detection
-    dataset_paths = [
-        "app/final_merged_career_guidance.csv",
-        "./app/final_merged_career_guidance.csv",
-        "/opt/render/project/src/app/final_merged_career_guidance.csv",
-    ]
-    
-    dataset_exists = False
-    actual_path = None
-    for path in dataset_paths:
-        if os.path.exists(path):
-            dataset_exists = True
-            actual_path = path
-            break
+    dataset_exists = os.path.exists("app/final_merged_career_guidance.csv")
 
     return {
         "status": "healthy",
         "service": "Career Compass",
         "ml_ready": predict_major is not None,
-        "rag_ready": career_system is not None,
+        "rag_ready": career_system is not None and hasattr(career_system, 'is_initialized') and career_system.is_initialized,
         "dataset_available": dataset_exists,
-        "dataset_path": actual_path,
         "port": 8080
     }
 
@@ -199,13 +172,6 @@ async def debug_files():
         "files_in_app": os.listdir("app") if os.path.exists("app") else "app folder not found",
         "all_csv_files": glob.glob("**/*.csv", recursive=True),
         "dataset_exists": os.path.exists("app/final_merged_career_guidance.csv"),
-        "dataset_paths_checked": [
-            "app/final_merged_career_guidance.csv",
-            "./app/final_merged_career_guidance.csv", 
-            "final_merged_career_guidance.csv",
-            "./final_merged_career_guidance.csv",
-            "/opt/render/project/src/app/final_merged_career_guidance.csv"
-        ]
     }
     return JSONResponse(result)
 
