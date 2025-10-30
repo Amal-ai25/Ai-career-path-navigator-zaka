@@ -1,8 +1,6 @@
 import os
 import pandas as pd
 import weaviate
-from weaviate.classes.init import Auth
-from weaviate.classes.config import Property, DataType
 from sentence_transformers import SentenceTransformer
 from openai import OpenAI
 import logging
@@ -22,7 +20,7 @@ class CareerCompassWeaviate:
         self.is_initialized = False
     
     def _initialize_weaviate_client(self):
-        """Initialize connection to Weaviate Cloud"""
+        """Initialize connection to Weaviate Cloud with compatible method"""
         try:
             cluster_url = os.getenv("WEAVIATE_CLOUD_URL")
             api_key = os.getenv("WEAVIATE_API_KEY")
@@ -33,17 +31,23 @@ class CareerCompassWeaviate:
 
             logger.info(f"🔗 Connecting to Weaviate Cloud: {cluster_url}")
             
-            self.client = weaviate.connect_to_weaviate_cloud(
-                cluster_url=cluster_url,
-                auth_credentials=Auth.api_key(api_key)
+            # Use the compatible connection method for weaviate-client v3
+            self.client = weaviate.Client(
+                url=cluster_url,
+                auth_client_secret=weaviate.AuthApiKey(api_key=api_key),
+                additional_headers={
+                    "X-OpenAI-Api-Key": os.getenv("OPENAI_API_KEY")
+                }
             )
 
+            # Test connection
             if self.client.is_ready():
                 logger.info("✅ Connected to Weaviate Cloud")
                 return True
             else:
                 logger.error("❌ Weaviate not ready")
                 return False
+                
         except Exception as e:
             logger.error(f"❌ Connection error: {e}")
             return False
@@ -53,23 +57,44 @@ class CareerCompassWeaviate:
         try:
             class_name = "CareerKnowledge"
             
-            # Check if collection exists
-            if self.client.collections.exists(class_name):
+            # Check if class exists
+            if self.client.schema.exists(class_name):
                 logger.info("✅ Schema already exists")
                 return True
             else:
                 logger.info("📋 Creating Weaviate schema...")
-                self.client.collections.create(
-                    name=class_name,
-                    properties=[
-                        Property(name="question", data_type=DataType.TEXT),
-                        Property(name="answer", data_type=DataType.TEXT),
-                        Property(name="is_augmented", data_type=DataType.BOOL),
-                        Property(name="source", data_type=DataType.TEXT),
+                
+                class_obj = {
+                    "class": class_name,
+                    "description": "Career guidance knowledge base",
+                    "properties": [
+                        {
+                            "name": "question",
+                            "dataType": ["text"],
+                            "description": "The question"
+                        },
+                        {
+                            "name": "answer", 
+                            "dataType": ["text"],
+                            "description": "The answer"
+                        },
+                        {
+                            "name": "is_augmented",
+                            "dataType": ["boolean"],
+                            "description": "Whether the data was augmented"
+                        },
+                        {
+                            "name": "source",
+                            "dataType": ["text"],
+                            "description": "Source of the data"
+                        }
                     ]
-                )
+                }
+                
+                self.client.schema.create_class(class_obj)
                 logger.info("✅ Schema created")
                 return True
+                
         except Exception as e:
             logger.error(f"❌ Schema creation error: {e}")
             return False
@@ -126,16 +151,14 @@ class CareerCompassWeaviate:
         # Add documents directly to Weaviate
         logger.info("💾 Adding documents to Weaviate...")
         try:
-            collection = self.client.collections.get("CareerKnowledge")
-            
             batch_size = 20
             successful_inserts = 0
             
-            for i in range(0, len(df), batch_size):
-                batch = df.iloc[i:i + batch_size]
-                objects = []
-                
-                for _, row in batch.iterrows():
+            # Configure batch
+            self.client.batch.configure(batch_size=batch_size)
+            
+            with self.client.batch as batch:
+                for i, (_, row) in enumerate(df.iterrows()):
                     try:
                         # Generate embedding for the full answer
                         text = str(row.get("answer", ""))
@@ -144,25 +167,29 @@ class CareerCompassWeaviate:
                             
                         embedding = embedding_model.encode(text).tolist()
                         
-                        # Create object with embedding
-                        objects.append({
-                            "properties": {
-                                "question": str(row.get("question", "")),
-                                "answer": text,
-                                "is_augmented": False,
-                                "source": "career_compass_dataset"
-                            },
-                            "vector": embedding
-                        })
+                        # Create data object
+                        data_object = {
+                            "question": str(row.get("question", "")),
+                            "answer": text,
+                            "is_augmented": False,
+                            "source": "career_compass_dataset"
+                        }
+                        
+                        # Add to batch with vector
+                        batch.add_data_object(
+                            data_object=data_object,
+                            class_name="CareerKnowledge",
+                            vector=embedding
+                        )
+                        
+                        successful_inserts += 1
+                        
+                        if (i + 1) % batch_size == 0:
+                            logger.info(f"📤 Processed {i + 1}/{len(df)} documents")
+                            
                     except Exception as e:
-                        logger.warning(f"⚠️ Failed to process row {_}: {e}")
+                        logger.warning(f"⚠️ Failed to process row {i}: {e}")
                         continue
-                
-                if objects:
-                    # Insert batch with embeddings
-                    result = collection.data.insert_many(objects)
-                    successful_inserts += len(objects)
-                    logger.info(f"📤 Added {min(i + batch_size, len(df))}/{len(df)} documents")
             
             logger.info(f"✅ Successfully added {successful_inserts}/{len(df)} documents")
             
@@ -188,19 +215,20 @@ class CareerCompassWeaviate:
             embedding_model = self._get_embedding_model()
             question_embedding = embedding_model.encode(question).tolist()
 
-            # Search in Weaviate
-            collection = self.client.collections.get("CareerKnowledge")
-            
-            response = collection.query.near_vector(
-                near_vector=question_embedding,
-                limit=5,
-                return_properties=["question", "answer", "source"]
+            # Search in Weaviate using nearVector
+            response = (
+                self.client.query
+                .get("CareerKnowledge", ["question", "answer", "source"])
+                .with_near_vector({"vector": question_embedding})
+                .with_limit(5)
+                .do()
             )
 
-            if not response.objects:
+            if "data" not in response or not response["data"]["Get"]["CareerKnowledge"]:
                 return {"answer": "I don't have enough information to answer that question. Please try asking about career paths, skills, or educational requirements.", "confidence": "Low"}
 
-            context = "\n".join([obj.properties["answer"] for obj in response.objects])
+            chunks = response["data"]["Get"]["CareerKnowledge"]
+            context = "\n".join([chunk["answer"] for chunk in chunks])
 
             prompt = f"""
             You are Career Compass, a career guidance assistant.
@@ -225,7 +253,7 @@ class CareerCompassWeaviate:
             final_answer = response.choices[0].message.content.strip()
             return {
                 "answer": final_answer,
-                "retrieved_chunks": len(response.objects),
+                "retrieved_chunks": len(chunks),
                 "confidence": "High"
             }
 
@@ -236,7 +264,7 @@ class CareerCompassWeaviate:
     def close_connection(self):
         """Close connection to Weaviate"""
         if self.client:
-            self.client.close()
+            # No explicit close needed in v3
             logger.info("🔌 Connection closed.")
 
 if __name__ == "__main__":
