@@ -2,73 +2,117 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from app.utils.ml_utils import predict_major
 import logging
 import os
 import uvicorn
 from dotenv import load_dotenv
-from app.rag_engine import CareerCompassWeaviate
 
 load_dotenv()
+
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-templates = Jinja2Templates(directory="app/templates")
+# Initialize services
 career_system = None
+predict_major = None
+
+# Try to import dependencies with error handling
+try:
+    from app.utils.ml_utils import predict_major
+    logger.info("✅ ML utils imported successfully")
+except Exception as e:
+    logger.error(f"❌ Failed to import ML utils: {e}")
+    predict_major = None
+
+try:
+    from app.rag_engine import CareerCompassWeaviate
+    logger.info("✅ RAG engine imported successfully")
+except Exception as e:
+    logger.error(f"❌ Failed to import RAG engine: {e}")
+    CareerCompassWeaviate = None
+
+# Configure static files and templates
+try:
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
+    templates = Jinja2Templates(directory="app/templates")
+    logger.info("✅ Static files and templates configured")
+except Exception as e:
+    logger.error(f"❌ Static files/templates error: {e}")
+    templates = None
 
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
     global career_system
-    try:
-        career_system = CareerCompassWeaviate()
-        csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "final_merged_career_guidance.csv")
-        success = career_system.initialize_system(csv_path)
-        if success:
-            logger.info("Career Compass system initialized successfully")
-        else:
-            logger.error("Career Compass system failed to initialize")
-    except Exception as e:
-        logger.error(f"Error initializing Career Compass system: {e}")
+    logger.info("🚀 Starting Career Compass services...")
+    
+    if CareerCompassWeaviate:
+        try:
+            career_system = CareerCompassWeaviate()
+            logger.info("✅ Career system instance created")
+            
+            # Try multiple dataset paths for Render
+            dataset_paths = [
+                "final_merged_career_guidance.csv",
+                "app/final_merged_career_guidance.csv"
+            ]
+            
+            for path in dataset_paths:
+                if os.path.exists(path):
+                    logger.info(f"📁 Found dataset at: {path}")
+                    success = career_system.initialize_system(path)
+                    if success:
+                        logger.info("✅ Career Compass system initialized successfully")
+                        break
+                    else:
+                        logger.error(f"❌ Failed to initialize with {path}")
+                else:
+                    logger.warning(f"📁 Dataset not found at: {path}")
+            else:
+                logger.error("❌ No dataset found in any location")
+                
+        except Exception as e:
+            logger.error(f"❌ Error initializing Career Compass system: {e}")
+    else:
+        logger.error("❌ CareerCompassWeaviate not available")
 
-# Home page - ML Recommendation
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 async def home(request: Request):
+    if not templates:
+        return HTMLResponse("""
+        <html>
+            <head><title>Career Compass</title></head>
+            <body>
+                <h1>Career Compass</h1>
+                <p>Application is running!</p>
+                <p><a href="/health">Check Health</a></p>
+            </body>
+        </html>
+        """)
+    
     work_styles = ["Team-Oriented","Remote", "On-site","Office/Data", "Hands-on/Field","Lab/Research","Creative/Design", "People-centric/Teaching", "Business", "freelance"]
     return templates.TemplateResponse("index.html", {"request": request, "work_styles": work_styles})
 
-def get_career_system():
-    global career_system
-    if career_system is None:
-        try:
-            from app.rag_engine import CareerCompassWeaviate
-            career_system = CareerCompassWeaviate()
-            # Don't initialize full system on import to save memory
-        except Exception as e:
-            logger.error(f"Failed to initialize career system: {e}")
-    return career_system
-
-# Chatbot API
 @app.post("/ask")
 async def ask_question(data: dict):
     try:
-        q = data.get("question")
-        logger.info(f"Received question: {q}")
         if not career_system:
-            return {"answer": "Career system not initialized.", "confidence": "Error"}
+            return {"answer": "Career guidance system is currently unavailable. Please try again later."}
+        
+        q = data.get("question", "").strip()
+        if not q:
+            return {"answer": "Please provide a question."}
+            
         response = career_system.ask_question(q)
         return {"answer": response["answer"]}
     except Exception as e:
         logger.error(f"Error in ask_question: {e}")
         return {"answer": "Sorry, I'm having trouble processing your question right now."}
 
-# ML Prediction Endpoint
 @app.post("/predict")
 async def predict(
-    request: Request,
     R: str = Form(None),
     I: str = Form(None),
     A: str = Form(None),
@@ -80,11 +124,11 @@ async def predict(
     work_style: str = Form(""),
     passion: str = Form("")
 ):
+    if not predict_major:
+        return JSONResponse({"success": False, "error": "Prediction system is currently unavailable."})
+    
     try:
-        logger.info(f"Received prediction request: R={R}, I={I}, A={A}, S={S}, E={E}, C={C}")
-        logger.info(f"Skills: {skills}, Courses: {courses}, Work Style: {work_style}, Passion: {passion}")
-        
-        riasec = {"R": bool(R), "I": bool(I), "A": bool(A), "S": bool(S), "E": bool(E), "C": bool(C)}
+        riasec = {k: bool(v) for k, v in zip("RIASEC", [R,I,A,S,E,C])}
         user_data = {
             "riasec": riasec,
             "skills_text": skills,
@@ -92,20 +136,23 @@ async def predict(
             "work_style": work_style,
             "passion_text": passion
         }
-
         result = predict_major(user_data)
-        logger.info(f"Prediction result: {result}")
-        
-        if "error" in result:
-            return JSONResponse({"success": False, "error": result["error"]})
-        else:
-            result["success"] = True
-            return JSONResponse(result)
-            
+        result["success"] = "error" not in result
+        return JSONResponse(result)
     except Exception as e:
-        logger.error(f"Error in predict endpoint: {e}")
+        logger.error(f"Error in predict: {e}")
         return JSONResponse({"success": False, "error": str(e)})
 
+# Health check endpoint for Render
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy",
+        "service": "Career Compass",
+        "ml_ready": predict_major is not None,
+        "rag_ready": career_system is not None
+    }
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))  # Changed to 8080
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
