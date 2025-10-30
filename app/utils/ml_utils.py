@@ -1,233 +1,221 @@
-import re
-import joblib
+import pandas as pd
 import numpy as np
+import joblib
+import re
 from fuzzywuzzy import process, fuzz
 from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder, LabelEncoder
+import logging
+import os
 
-# Load all models and encoders
+logger = logging.getLogger(__name__)
+
+# Global variables for models
+model = None
+mlb_skills = None
+mlb_courses = None
+ohe_work_style = None
+ohe_passion = None
+le_major = None
+le_faculty = None
+le_degree = None
+le_campus = None
+all_skills = None
+all_courses = None
+all_passions = None
+all_work_styles = None
+
 def load_models():
-    models = {}
+    """Load all ML models and encoders from root models directory"""
+    global model, mlb_skills, mlb_courses, ohe_work_style, ohe_passion
+    global le_major, le_faculty, le_degree, le_campus
+    global all_skills, all_courses, all_passions, all_work_styles
+    
     try:
-        models['model'] = joblib.load('models/models/major_recommendation_model.pkl')
-        models['mlb_skills'] = joblib.load('models/models/mlb_skills.pkl')
-        models['mlb_courses'] = joblib.load('models/models/mlb_courses.pkl')
-        models['ohe_work_style'] = joblib.load('models/models/ohe_work_style.pkl')
-        models['ohe_passion'] = joblib.load('models/models/ohe_passion.pkl')
-        models['le_major'] = joblib.load('models/models/le_major.pkl')
-        models['le_faculty'] = joblib.load('models/models/le_faculty.pkl')
-        models['le_degree'] = joblib.load('models/models/le_degree.pkl')
-        models['le_campus'] = joblib.load('models/models/le_campus.pkl')
+        # Models are in root models/ directory (Ai-career-path-navigator-zaka/models/)
+        models_dir = "models"
         
-        # Load master lists
-        models['all_skills'] = joblib.load('models/models/master_skills.pkl')
-        models['all_courses'] = joblib.load('models/models/master_courses.pkl')
-        models['all_passions'] = joblib.load('models/models/master_passions.pkl')
-        models['all_work_styles'] = joblib.load('models/models/master_work_styles.pkl')
+        logger.info(f"📁 Loading models from: {os.path.abspath(models_dir)}")
         
-        # Add common variations
-        models['all_skills'].extend([
-            'Power BI', 'PowerBI', 'Data Analysis', 'Data Analytics', 'Business Intelligence',
-            'AI', 'Artificial Intelligence', 'Machine Learning', 'Deep Learning',
-            'Programming', 'Coding', 'Software Development', 'Web Development'
-        ])
+        # Check if models directory exists
+        if not os.path.exists(models_dir):
+            logger.error(f"❌ Models directory not found: {models_dir}")
+            logger.info(f"📂 Current directory: {os.getcwd()}")
+            logger.info(f"📂 Directory contents: {os.listdir('.')}")
+            return False
         
-        models['all_courses'].extend([
-            'Mathematics', 'Math', 'Advanced Mathematics', 'Applied Mathematics',
-            'AI', 'Artificial Intelligence', 'Machine Learning', 'Data Science'
-        ])
+        # List available model files
+        model_files = os.listdir(models_dir)
+        logger.info(f"📄 Available model files: {model_files}")
         
-        models['all_passions'].extend([
-            'AI', 'Artificial Intelligence', 'Machine Learning', 'Technology',
-            'Data Science', 'Programming', 'Computer Science'
-        ])
+        # Load the main model
+        model_path = os.path.join(models_dir, "major_recommendation_model.pkl")
+        if os.path.exists(model_path):
+            model = joblib.load(model_path)
+            logger.info("✅ ML model loaded successfully")
+        else:
+            logger.error(f"❌ Model file not found: {model_path}")
+            return False
         
-        # Remove duplicates
-        models['all_skills'] = list(set(models['all_skills']))
-        models['all_courses'] = list(set(models['all_courses']))
-        models['all_passions'] = list(set(models['all_passions']))
+        # Load encoders
+        encoders_to_load = {
+            'mlb_skills': 'mlb_skills.pkl',
+            'mlb_courses': 'mlb_courses.pkl', 
+            'ohe_work_style': 'ohe_work_style.pkl',
+            'ohe_passion': 'ohe_passion.pkl',
+            'le_major': 'le_major.pkl',
+            'le_faculty': 'le_faculty.pkl',
+            'le_degree': 'le_degree.pkl',
+            'le_campus': 'le_campus.pkl',
+            'master_skills': 'master_skills.pkl',
+            'master_courses': 'master_courses.pkl',
+            'master_passions': 'master_passions.pkl',
+            'master_work_styles': 'master_work_styles.pkl'
+        }
         
-        print(f"✅ Loaded {len(models['all_skills'])} skills, {len(models['all_courses'])} courses, {len(models['all_passions'])} passions")
-        return models
+        for var_name, file_name in encoders_to_load.items():
+            file_path = os.path.join(models_dir, file_name)
+            if os.path.exists(file_path):
+                try:
+                    if var_name.startswith('mlb_'):
+                        globals()[var_name] = joblib.load(file_path)
+                    elif var_name.startswith('ohe_'):
+                        globals()[var_name] = joblib.load(file_path)
+                    elif var_name.startswith('le_'):
+                        globals()[var_name] = joblib.load(file_path)
+                    elif var_name.startswith('master_'):
+                        globals()[var_name] = joblib.load(file_path)
+                    logger.info(f"✅ Loaded {var_name} from {file_name}")
+                except Exception as e:
+                    logger.error(f"❌ Error loading {file_name}: {e}")
+                    return False
+            else:
+                logger.error(f"❌ Model file not found: {file_path}")
+                return False
+        
+        logger.info("✅ All ML components loaded successfully")
+        return True
+        
     except Exception as e:
-        print(f"❌ Error loading models: {e}")
-        return None
+        logger.error(f"❌ Error loading ML models: {e}")
+        import traceback
+        logger.error(f"🔍 Full traceback: {traceback.format_exc()}")
+        return False
 
-models = load_models()
-
-def process_user_text_input(user_input, master_list, input_type="skills"):
+def process_user_text_input(user_input, master_list, threshold=70):
     """
-    Enhanced text processing with better handling of comma-separated values
+    Process user text input using fuzzy matching (from your Colab)
     """
     if not user_input or not isinstance(user_input, str):
         return []
-    
-    detected_items = set()
-    
-    print(f"🔍 Processing {input_type} input: '{user_input}'")
-    
-    # Clean and normalize the input
-    user_input = user_input.strip()
-    
-    # Handle comma-separated values more intelligently
-    tokens = []
-    if ',' in user_input:
-        # Split by commas but be careful with spaces
-        parts = [part.strip() for part in user_input.split(',')]
-        tokens.extend(parts)
-    else:
-        # Also split by spaces for single entries
-        tokens = [user_input]
-    
-    # Remove empty tokens
-    tokens = [token for token in tokens if token and len(token) > 1]
-    
-    print(f"   Tokens extracted: {tokens}")
-    
-    for token in tokens:
-        token = token.strip()
-        if not token:
-            continue
-            
-        print(f"   🔎 Matching token: '{token}'")
-        
-        # Strategy 1: Exact match (case-insensitive)
-        exact_matches = [item for item in master_list if token.lower() == item.lower()]
-        if exact_matches:
-            detected_items.update(exact_matches)
-            print(f"      ✅ Exact match: {exact_matches}")
-            continue
-        
-        # Strategy 2: Partial match
-        partial_matches = [item for item in master_list if token.lower() in item.lower() or item.lower() in token.lower()]
-        if partial_matches:
-            # Take the best partial match (longest or most specific)
-            best_match = max(partial_matches, key=len)
-            detected_items.add(best_match)
-            print(f"      ✅ Partial match: {best_match}")
-            continue
-        
-        # Strategy 3: Fuzzy matching with multiple approaches
-        # Try WRatio first (balanced approach)
-        matches = process.extract(token, master_list, scorer=fuzz.WRatio, limit=10)
-        for match, score in matches:
-            if score >= 75:  # Good balance for spelling errors
-                detected_items.add(match)
-                print(f"      ✅ Fuzzy match: {match} (score: {score})")
-                break  # Take the best fuzzy match for this token
-    
-    final_items = list(detected_items)
-    print(f"🎯 Final {input_type}: {final_items}")
-    return final_items
+
+    detected_items = []
+    # Try to match the whole input first
+    best_match, score = process.extractOne(user_input, master_list, scorer=fuzz.partial_ratio)
+    if score >= threshold:
+        detected_items.append(best_match)
+
+    # Also try to match individual words
+    words = re.findall(r'\b\w+\b', user_input.lower())
+    for word in words:
+        if len(word) > 3:  # Only consider words longer than 3 characters
+            best_match, score = process.extractOne(word, master_list, scorer=fuzz.partial_ratio)
+            if score >= threshold:
+                detected_items.append(best_match)
+
+    return list(set(detected_items))  # Remove duplicates
 
 def prepare_user_input(user_data):
     """
-    Prepare user input for prediction with extensive debugging
+    Prepare user input for prediction (from your Colab)
+    user_data should be a dictionary with:
+    - riasec: dict with R,I,A,S,E,C as keys and 0/1 as values
+    - skills_text: string of user skills
+    - courses_text: string of user courses
+    - work_style: string of selected work style
+    - passion_text: string of user passion
     """
-    if not models:
-        print("❌ Models not loaded!")
-        return None, "Models not loaded"
-    
-    print(f"📥 Received user data: {user_data}")
+    global all_skills, all_courses, all_passions, all_work_styles
+    global mlb_skills, mlb_courses, ohe_work_style, ohe_passion
     
     # Process RIASEC
     riasec_order = ['R', 'I', 'A', 'S', 'E', 'C']
-    riasec_values = [1 if user_data['riasec'].get(col, False) else 0 for col in riasec_order]
-    X_riasec = np.array([riasec_values])
-    print(f"🎭 RIASEC values: {dict(zip(riasec_order, riasec_values))}")
-    
-    # Process Skills
-    skills_text = user_data.get('skills_text', '')
-    detected_skills = process_user_text_input(skills_text, models['all_skills'], "skills")
-    
-    # If no skills detected but we have text, try to extract individual words
-    if not detected_skills and skills_text:
-        print("🔄 Trying alternative skill extraction...")
-        # Extract individual words and try to match them
-        words = re.findall(r'\b\w+\b', skills_text.lower())
-        for word in words:
-            if len(word) > 3:  # Only consider words longer than 3 characters
-                matches = process.extract(word, models['all_skills'], scorer=fuzz.partial_ratio, limit=3)
-                for match, score in matches:
-                    if score >= 80:
-                        detected_skills.append(match)
-                        break
-        detected_skills = list(set(detected_skills))
-        print(f"🔄 Alternative skills detected: {detected_skills}")
-    
-    X_skills = models['mlb_skills'].transform([detected_skills])
-    print(f"🔧 Skills features shape: {X_skills.shape}")
-    
-    # Process Courses
-    courses_text = user_data.get('courses_text', '')
-    detected_courses = process_user_text_input(courses_text, models['all_courses'], "courses")
-    X_courses = models['mlb_courses'].transform([detected_courses])
-    print(f"🔧 Courses features shape: {X_courses.shape}")
-    
+    X_riasec = np.array([[user_data['riasec'].get(col, 0) for col in riasec_order]])
+
+    # Process Skills with NLP
+    detected_skills = process_user_text_input(user_data['skills_text'], all_skills)
+    X_skills = mlb_skills.transform([detected_skills])
+
+    # Process Courses with NLP
+    detected_courses = process_user_text_input(user_data['courses_text'], all_courses)
+    X_courses = mlb_courses.transform([detected_courses])
+
     # Process Work Style
-    work_style = user_data.get('work_style', '')
-    print(f"💼 Work style: {work_style}")
-    if work_style not in models['all_work_styles']:
-        work_style = models['all_work_styles'][0] if models['all_work_styles'] else 'Office/Data'
-        print(f"🔄 Using default work style: {work_style}")
-    X_work_style = models['ohe_work_style'].transform([[work_style]])
-    print(f"🔧 Work style features shape: {X_work_style.shape}")
-    
-    # Process Passion
-    passion_text = user_data.get('passion_text', '')
-    detected_passions = process_user_text_input(passion_text, models['all_passions'], "passions")
-    passion = detected_passions[0] if detected_passions else (models['all_passions'][0] if models['all_passions'] else 'Technology')
-    print(f"❤️ Passion: {passion}")
-    X_passion = models['ohe_passion'].transform([[passion]])
-    print(f"🔧 Passion features shape: {X_passion.shape}")
-    
+    # If user's work style isn't found, use the most common one
+    work_style = user_data['work_style']
+    if work_style not in all_work_styles:
+        work_style = all_work_styles[0]  # Use first available
+    X_work_style = ohe_work_style.transform([[work_style]])
+
+    # Process Passion with NLP
+    detected_passion = process_user_text_input(user_data['passion_text'], all_passions)
+    passion = detected_passion[0] if detected_passion else all_passions[0]
+    X_passion = ohe_passion.transform([[passion]])
+
     # Combine all features
     X_user = np.hstack([X_riasec, X_skills, X_courses, X_work_style, X_passion])
-    print(f"🎯 Final feature vector shape: {X_user.shape}")
-    
-    detected_info = {
+
+    return X_user, {
         'detected_skills': detected_skills,
         'detected_courses': detected_courses,
         'detected_passion': passion
     }
-    
-    print(f"📊 Detected info: {detected_info}")
-    
-    return X_user, detected_info
 
 def predict_major(user_data):
     """
-    Predict major based on user input
+    Predict major based on user input (from your Colab)
     """
-    if not models:
-        return {"error": "Models not loaded. Please train the model first."}
+    global model, le_major, le_faculty, le_degree, le_campus
     
-    print("🎯 Starting prediction...")
+    if model is None:
+        return {"error": "ML model not loaded. Please try again later.", "success": False}
     
-    # Prepare user input
-    X_user, detected_info = prepare_user_input(user_data)
-    
-    if X_user is None:
-        return {"error": "Failed to prepare user input"}
-    
-    # Make prediction
     try:
-        prediction = models['model'].predict(X_user)
-        print(f"🤖 Model prediction: {prediction}")
-        
+        # Prepare user input
+        X_user, detected_info = prepare_user_input(user_data)
+
+        # Make prediction
+        prediction = model.predict(X_user)
+
         # Decode predictions
         result = {
-            'major': models['le_major'].inverse_transform([prediction[0][0]])[0],
-            'faculty': models['le_faculty'].inverse_transform([prediction[0][1]])[0],
-            'degree': models['le_degree'].inverse_transform([prediction[0][2]])[0],
-            'campus': models['le_campus'].inverse_transform([prediction[0][3]])[0],
+            'major': le_major.inverse_transform([prediction[0][0]])[0],
+            'faculty': le_faculty.inverse_transform([prediction[0][1]])[0],
+            'degree': le_degree.inverse_transform([prediction[0][2]])[0],
+            'campus': le_campus.inverse_transform([prediction[0][3]])[0],
             'detected_info': detected_info,
             'success': True
         }
-        
-        print(f"✅ Prediction result: {result}")
+
+        # Get probabilities for top recommendations
+        if hasattr(model, 'predict_proba'):
+            try:
+                probas = [estimator.predict_proba(X_user)[0] for estimator in model.estimators_]
+                major_probas = list(zip(le_major.classes_, probas[0]))
+                major_probas.sort(key=lambda x: x[1], reverse=True)
+                result['top_recommendations'] = [
+                    {'major': major, 'confidence': float(confidence)} 
+                    for major, confidence in major_probas[:3]  # Top 3 majors
+                ]
+            except Exception as e:
+                logger.warning(f"Could not get probabilities: {e}")
+                result['top_recommendations'] = []
+
         return result
         
     except Exception as e:
-        error_msg = f"Prediction failed: {str(e)}"
-        print(f"❌ {error_msg}")
-        return {"error": error_msg, "success": False}
+        logger.error(f"❌ Error in prediction: {e}")
+        return {"error": f"Prediction failed: {str(e)}", "success": False}
+
+# Load models when module is imported
+logger.info("🔄 Attempting to load ML models...")
+load_models()
