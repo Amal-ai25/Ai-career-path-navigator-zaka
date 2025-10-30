@@ -21,24 +21,46 @@ predict_major = None
 
 # Try to import dependencies with error handling
 try:
-    from app.utils.ml_utils import predict_major
-    logger.info("✅ ML utils imported successfully")
+    # Try different import paths for Render
+    try:
+        from app.utils.ml_utils import predict_major
+        logger.info("✅ ML utils imported successfully from app.utils.ml_utils")
+    except ImportError:
+        from utils.ml_utils import predict_major
+        logger.info("✅ ML utils imported successfully from utils.ml_utils")
+        
 except Exception as e:
     logger.error(f"❌ Failed to import ML utils: {e}")
     predict_major = None
 
 try:
-    from app.rag_engine import CareerCompassWeaviate
-    logger.info("✅ RAG engine imported successfully")
+    # Try different import paths for Render
+    try:
+        from app.rag_engine import CareerCompassWeaviate
+        logger.info("✅ RAG engine imported successfully from app.rag_engine")
+    except ImportError:
+        from rag_engine import CareerCompassWeaviate
+        logger.info("✅ RAG engine imported successfully from rag_engine")
+        
 except Exception as e:
     logger.error(f"❌ Failed to import RAG engine: {e}")
     CareerCompassWeaviate = None
 
 # Configure static files and templates
 try:
-    app.mount("/static", StaticFiles(directory="app/static"), name="static")
-    templates = Jinja2Templates(directory="app/templates")
-    logger.info("✅ Static files and templates configured")
+    # Try different paths for static files
+    if os.path.exists("app/static"):
+        app.mount("/static", StaticFiles(directory="app/static"), name="static")
+        templates = Jinja2Templates(directory="app/templates")
+        logger.info("✅ Static files and templates configured from app/ directory")
+    elif os.path.exists("static"):
+        app.mount("/static", StaticFiles(directory="static"), name="static")
+        templates = Jinja2Templates(directory="templates")
+        logger.info("✅ Static files and templates configured from root directory")
+    else:
+        logger.warning("❌ Static files directory not found")
+        templates = None
+        
 except Exception as e:
     logger.error(f"❌ Static files/templates error: {e}")
     templates = None
@@ -56,7 +78,8 @@ async def startup_event():
             # Try multiple dataset paths for Render
             dataset_paths = [
                 "final_merged_career_guidance.csv",
-                "app/final_merged_career_guidance.csv"
+                "app/final_merged_career_guidance.csv",
+                "./final_merged_career_guidance.csv"
             ]
             
             for path in dataset_paths:
@@ -86,8 +109,9 @@ async def home(request: Request):
             <head><title>Career Compass</title></head>
             <body>
                 <h1>Career Compass</h1>
-                <p>Application is running!</p>
+                <p>Application is running on Render!</p>
                 <p><a href="/health">Check Health</a></p>
+                <p>If you see this, the basic app is working.</p>
             </body>
         </html>
         """)
@@ -153,6 +177,8 @@ async def health():
         "rag_ready": career_system is not None
     }
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
+@app.get("/test")
+async def test():
+    return {"message": "Server is running!", "timestamp": "now"}
+
+# Render runs this automatically - no need for __main__ block
