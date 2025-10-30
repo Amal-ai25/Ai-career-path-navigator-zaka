@@ -53,35 +53,27 @@ async def startup_event():
             career_system = CareerCompassWeaviate()
             logger.info("✅ Career system instance created")
             
-            # Try dataset paths - stop when first one works
-            dataset_paths = [
-                "app/final_merged_career_guidance.csv",  # Main expected path
-                "./app/final_merged_career_guidance.csv",
-            ]
+            # SIMPLIFIED path detection - only check the main path
+            main_path = "app/final_merged_career_guidance.csv"
+            full_path = os.path.abspath(main_path)
             
-            dataset_found = False
-            for path in dataset_paths:
-                full_path = os.path.abspath(path)
-                if os.path.exists(full_path):
-                    logger.info(f"📁 Found dataset at: {full_path}")
-                    logger.info(f"📊 File size: {os.path.getsize(full_path)} bytes")
-                    success = career_system.initialize_system(full_path)
-                    if success:
-                        logger.info("✅ Career Compass system initialized successfully")
-                        dataset_found = True
-                        break
-                    else:
-                        logger.error(f"❌ Failed to initialize with {full_path}")
-                        # Don't try other paths if this one exists but failed
-                        break
-            
-            if not dataset_found:
-                logger.error("❌ No dataset found. Chat features will be disabled.")
-                # Debug info
+            if os.path.exists(full_path):
+                logger.info(f"📁 Found dataset at: {full_path}")
+                logger.info(f"📊 File size: {os.path.getsize(full_path)} bytes")
+                
+                success = career_system.initialize_system(full_path)
+                if success:
+                    logger.info("✅ Career Compass system initialized successfully")
+                else:
+                    logger.error("❌ Career Compass system initialization failed")
+            else:
+                logger.error(f"❌ Dataset not found at: {full_path}")
+                # Show available files for debugging
                 current_dir = os.getcwd()
-                logger.info(f"📂 Current working directory: {current_dir}")
+                logger.info(f"📂 Current directory: {current_dir}")
                 if os.path.exists('app'):
-                    logger.info(f"📂 Files in app directory: {os.listdir('app')}")
+                    app_files = os.listdir('app')
+                    logger.info(f"📂 Files in app directory: {app_files}")
                     
         except Exception as e:
             logger.error(f"❌ Error initializing Career Compass system: {e}")
@@ -101,7 +93,7 @@ async def home(request: Request):
 @app.post("/ask")
 async def ask_question(data: dict):
     try:
-        if not career_system:
+        if not career_system or not hasattr(career_system, 'is_initialized') or not career_system.is_initialized:
             return {"answer": "Career guidance system is currently unavailable. Please try again later."}
         
         q = data.get("question", "").strip()
@@ -149,31 +141,39 @@ async def predict(
 @app.get("/health")
 async def health():
     dataset_exists = os.path.exists("app/final_merged_career_guidance.csv")
+    rag_ready = career_system is not None and hasattr(career_system, 'is_initialized') and career_system.is_initialized
 
     return {
         "status": "healthy",
         "service": "Career Compass",
         "ml_ready": predict_major is not None,
-        "rag_ready": career_system is not None and hasattr(career_system, 'is_initialized') and career_system.is_initialized,
+        "rag_ready": rag_ready,
         "dataset_available": dataset_exists,
         "port": 8080
     }
 
-@app.get("/debug/files")
-async def debug_files():
-    """Debug endpoint to check file structure"""
-    import glob
-    current_dir = os.getcwd()
-    
-    result = {
-        "current_working_dir": current_dir,
-        "files_in_root": os.listdir("."),
-        "app_directory_exists": os.path.exists("app"),
-        "files_in_app": os.listdir("app") if os.path.exists("app") else "app folder not found",
-        "all_csv_files": glob.glob("**/*.csv", recursive=True),
-        "dataset_exists": os.path.exists("app/final_merged_career_guidance.csv"),
-    }
-    return JSONResponse(result)
+@app.get("/debug/rag-code")
+async def debug_rag_code():
+    """Debug endpoint to check the actual RAG engine code"""
+    try:
+        with open("app/rag_engine.py", "r") as f:
+            content = f.read()
+        
+        # Check which connection method is being used
+        uses_connect_to_weaviate_cloud = "connect_to_weaviate_cloud" in content
+        uses_weaviate_client = "weaviate.Client" in content
+        
+        # Get first few lines for verification
+        lines = content.split('\n')[:50]
+        
+        return JSONResponse({
+            "uses_connect_to_weaviate_cloud": uses_connect_to_weaviate_cloud,
+            "uses_weaviate_client": uses_weaviate_client,
+            "first_50_lines": lines,
+            "file_exists": True
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e), "file_exists": False})
 
 @app.get("/test")
 async def test():
