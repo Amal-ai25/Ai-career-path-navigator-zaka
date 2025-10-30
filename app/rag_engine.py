@@ -19,12 +19,17 @@ class CareerCompassWeaviate:
         self.client = None
         self.embedding_model = None
         self.llm_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.is_initialized = False
     
     def _initialize_weaviate_client(self):
         """Initialize connection to Weaviate Cloud"""
         try:
             cluster_url = os.getenv("WEAVIATE_CLOUD_URL")
             api_key = os.getenv("WEAVIATE_API_KEY")
+
+            if not cluster_url or not api_key:
+                logger.error("❌ Missing Weaviate environment variables")
+                return False
 
             logger.info(f"🔗 Connecting to Weaviate Cloud: {cluster_url}")
             
@@ -71,12 +76,17 @@ class CareerCompassWeaviate:
 
     def _get_embedding_model(self):
         if self.embedding_model is None:
-            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            try:
+                self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+                logger.info("✅ Embedding model loaded")
+            except Exception as e:
+                logger.error(f"❌ Failed to load embedding model: {e}")
+                raise
         return self.embedding_model
 
     def initialize_system(self, data_path):
         """Initialize the complete RAG system"""
-        logger.info("🚀 Initializing Career Compass RAG...")
+        logger.info(f"🚀 Initializing Career Compass RAG with data: {data_path}")
 
         if not self._initialize_weaviate_client():
             logger.error("❌ Weaviate client init failed")
@@ -93,12 +103,25 @@ class CareerCompassWeaviate:
                 
             df = pd.read_csv(data_path)
             logger.info(f"📄 Loaded {len(df)} rows from CSV")
+            
+            # Check if dataframe has required columns
+            required_columns = ['question', 'answer']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                logger.error(f"❌ Missing required columns: {missing_columns}")
+                logger.info(f"📋 Available columns: {list(df.columns)}")
+                return False
+                
         except Exception as e:
             logger.error(f"❌ Failed to load data: {e}")
             return False
 
         # Get embedding model
-        embedding_model = self._get_embedding_model()
+        try:
+            embedding_model = self._get_embedding_model()
+        except Exception as e:
+            logger.error(f"❌ Failed to get embedding model: {e}")
+            return False
 
         # Add documents directly to Weaviate
         logger.info("💾 Adding documents to Weaviate...")
@@ -106,33 +129,50 @@ class CareerCompassWeaviate:
             collection = self.client.collections.get("CareerKnowledge")
             
             batch_size = 20
+            successful_inserts = 0
+            
             for i in range(0, len(df), batch_size):
                 batch = df.iloc[i:i + batch_size]
                 objects = []
                 
                 for _, row in batch.iterrows():
-                    # Generate embedding for the full answer
-                    text = str(row.get("answer", ""))
-                    embedding = embedding_model.encode(text).tolist()
-                    
-                    # Create object with embedding
-                    objects.append({
-                        "properties": {
-                            "question": str(row.get("question", "")),
-                            "answer": text,
-                            "is_augmented": False,
-                            "source": "career_compass_dataset"
-                        },
-                        "vector": embedding
-                    })
+                    try:
+                        # Generate embedding for the full answer
+                        text = str(row.get("answer", ""))
+                        if not text.strip():  # Skip empty answers
+                            continue
+                            
+                        embedding = embedding_model.encode(text).tolist()
+                        
+                        # Create object with embedding
+                        objects.append({
+                            "properties": {
+                                "question": str(row.get("question", "")),
+                                "answer": text,
+                                "is_augmented": False,
+                                "source": "career_compass_dataset"
+                            },
+                            "vector": embedding
+                        })
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to process row {_}: {e}")
+                        continue
                 
-                # Insert batch with embeddings
-                collection.data.insert_many(objects)
-                logger.info(f"📤 Added {min(i + batch_size, len(df))}/{len(df)} documents")
+                if objects:
+                    # Insert batch with embeddings
+                    result = collection.data.insert_many(objects)
+                    successful_inserts += len(objects)
+                    logger.info(f"📤 Added {min(i + batch_size, len(df))}/{len(df)} documents")
             
-            logger.info("✅ All documents added successfully")
-            logger.info("🎉 Career Compass RAG is ready!")
-            return True
+            logger.info(f"✅ Successfully added {successful_inserts}/{len(df)} documents")
+            
+            if successful_inserts > 0:
+                self.is_initialized = True
+                logger.info("🎉 Career Compass RAG is ready!")
+                return True
+            else:
+                logger.error("❌ No documents were successfully added")
+                return False
             
         except Exception as e:
             logger.error(f"❌ Error adding documents: {e}")
@@ -141,8 +181,8 @@ class CareerCompassWeaviate:
     def ask_question(self, question):
         """Retrieve + Generate an answer using RAG"""
         try:
-            if not self.client:
-                return {"answer": "System not initialized.", "confidence": "Error"}
+            if not self.client or not self.is_initialized:
+                return {"answer": "Career guidance system is currently unavailable. Please try again later.", "confidence": "Error"}
 
             # Generate embedding for the question
             embedding_model = self._get_embedding_model()
@@ -158,20 +198,21 @@ class CareerCompassWeaviate:
             )
 
             if not response.objects:
-                return {"answer": "I don't have enough information.", "confidence": "Low"}
+                return {"answer": "I don't have enough information to answer that question. Please try asking about career paths, skills, or educational requirements.", "confidence": "Low"}
 
             context = "\n".join([obj.properties["answer"] for obj in response.objects])
 
             prompt = f"""
             You are Career Compass, a career guidance assistant.
 
-            Use the context below to answer the question.
+            Use the context below to answer the question. If the context doesn't contain relevant information, say so.
 
             Context:
             {context}
 
             Question: {question}
-            Answer:
+
+            Provide a helpful, career-focused answer based on the context:
             """
 
             response = self.llm_client.chat.completions.create(
@@ -190,7 +231,7 @@ class CareerCompassWeaviate:
 
         except Exception as e:
             logger.error(f"❌ Error in ask_question: {e}")
-            return {"answer": f"Error: {e}", "confidence": "Error"}
+            return {"answer": "Sorry, I'm having trouble processing your question right now. Please try again.", "confidence": "Error"}
 
     def close_connection(self):
         """Close connection to Weaviate"""
