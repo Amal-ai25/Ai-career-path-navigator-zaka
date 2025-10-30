@@ -49,7 +49,7 @@ class CareerCompassWeaviate:
         try:
             class_name = "CareerKnowledge"
             
-            # Check if collection exists
+            # Check if collection exists using Weaviate 4.x method
             if self.client.collections.exists(class_name):
                 logger.info("✅ Schema already exists")
                 return True
@@ -101,6 +101,10 @@ class CareerCompassWeaviate:
             return False
 
         try:
+            if not os.path.exists(data_path):
+                logger.error(f"❌ Data file not found: {data_path}")
+                return False
+                
             df = pd.read_csv(data_path)
             logger.info(f"📄 Loaded {len(df)} rows from CSV")
         except Exception as e:
