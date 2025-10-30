@@ -1,8 +1,13 @@
 import os
 import pandas as pd
 import weaviate
-from sentence_transformers import SentenceTransformer
-import openai
+from weaviate.classes.init import Auth
+from weaviate.classes.config import Property, DataType
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_weaviate.vectorstores import WeaviateVectorStore
+from langchain.docstore.document import Document
+from langchain.text_splitter import TokenTextSplitter
+from openai import OpenAI
 import logging
 from dotenv import load_dotenv
 
@@ -15,19 +20,12 @@ logger = logging.getLogger(__name__)
 class CareerCompassWeaviate:
     def __init__(self):
         self.client = None
-        self.embedding_model = None
+        self.vectorstore = None
+        self.llm_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.is_initialized = False
-        
-        # Initialize OpenAI with compatible method
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if openai_api_key:
-            openai.api_key = openai_api_key
-            logger.info("✅ OpenAI client configured")
-        else:
-            logger.error("❌ OpenAI API key not found")
-    
+
     def _initialize_weaviate_client(self):
-        """Initialize connection to Weaviate Cloud"""
+        """Initialize Weaviate Cloud client"""
         try:
             cluster_url = os.getenv("WEAVIATE_CLOUD_URL")
             api_key = os.getenv("WEAVIATE_API_KEY")
@@ -37,217 +35,187 @@ class CareerCompassWeaviate:
                 return False
 
             logger.info(f"🔗 Connecting to Weaviate Cloud: {cluster_url}")
-            
-            # Weaviate v3 connection
-            self.client = weaviate.Client(
-                url=cluster_url,
-                auth_client_secret=weaviate.AuthApiKey(api_key=api_key)
+
+            self.client = weaviate.connect_to_weaviate_cloud(
+                cluster_url=cluster_url,
+                auth_credentials=Auth.api_key(api_key)
             )
 
-            # Test connection
             if self.client.is_ready():
-                logger.info("✅ Connected to Weaviate Cloud successfully!")
+                logger.info("✅ Successfully connected to Weaviate Cloud!")
                 return True
             else:
-                logger.error("❌ Weaviate not ready")
+                logger.error("❌ Failed to connect to Weaviate Cloud")
                 return False
-                
+
         except Exception as e:
             logger.error(f"❌ Weaviate connection error: {e}")
             return False
 
     def _check_and_create_schema(self):
-        """Ensure the schema exists"""
+        """Check if schema exists, create if not."""
         try:
             class_name = "CareerKnowledge"
             
-            # Check if class exists
-            if self.client.schema.exists(class_name):
+            # Check if collection exists
+            if self.client.collections.exists(class_name):
                 logger.info("✅ Schema already exists")
                 return True
             else:
                 logger.info("📋 Creating Weaviate schema...")
-                
-                class_obj = {
-                    "class": class_name,
-                    "description": "Career guidance knowledge base",
-                    "properties": [
-                        {
-                            "name": "question",
-                            "dataType": ["text"],
-                            "description": "The question"
-                        },
-                        {
-                            "name": "answer", 
-                            "dataType": ["text"],
-                            "description": "The answer"
-                        },
-                        {
-                            "name": "is_augmented",
-                            "dataType": ["boolean"],
-                            "description": "Whether the data was augmented"
-                        },
-                        {
-                            "name": "source",
-                            "dataType": ["text"],
-                            "description": "Source of the data"
-                        }
+
+                self.client.collections.create(
+                    name=class_name,
+                    properties=[
+                        Property(name="question", data_type=DataType.TEXT),
+                        Property(name="answer", data_type=DataType.TEXT),
+                        Property(name="is_augmented", data_type=DataType.BOOL),
+                        Property(name="source", data_type=DataType.TEXT),
                     ]
-                }
-                
-                self.client.schema.create_class(class_obj)
-                logger.info("✅ Schema created successfully")
+                )
+                logger.info("✅ Schema created successfully!")
                 return True
-                
+
         except Exception as e:
             logger.error(f"❌ Schema creation error: {e}")
             return False
 
-    def _get_embedding_model(self):
-        if self.embedding_model is None:
-            try:
-                logger.info("🔄 Loading embedding model...")
-                self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-                logger.info("✅ Embedding model loaded")
-            except Exception as e:
-                logger.error(f"❌ Failed to load embedding model: {e}")
-                raise
-        return self.embedding_model
-
     def initialize_system(self, data_path):
-        """Initialize the complete RAG system"""
-        logger.info(f"🚀 Initializing Career Compass RAG with data: {data_path}")
+        """Initialize the complete RAG system."""
+        logger.info("🚀 Initializing Career Compass RAG...")
 
         # Step 1: Connect to Weaviate
         if not self._initialize_weaviate_client():
-            logger.error("❌ Weaviate client initialization failed")
+            logger.error("❌ Failed to initialize Weaviate client")
             return False
 
         # Step 2: Create schema
         if not self._check_and_create_schema():
-            logger.error("❌ Schema creation failed")
+            logger.error("❌ Failed to create schema")
             return False
 
         # Step 3: Load data
+        logger.info(f"📂 Loading data from: {data_path}")
         try:
-            if not os.path.exists(data_path):
-                logger.error(f"❌ Data file not found: {data_path}")
-                return False
-                
-            logger.info("📄 Loading CSV data...")
             df = pd.read_csv(data_path)
-            logger.info(f"✅ Loaded {len(df)} rows from CSV")
-            
-            # Check required columns
-            required_columns = ['question', 'answer']
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            if missing_columns:
-                logger.error(f"❌ Missing required columns: {missing_columns}")
-                logger.info(f"📋 Available columns: {list(df.columns)}")
-                return False
+            logger.info(f"📄 Loaded {len(df)} rows from CSV")
+        except Exception as e:
+            logger.error(f"❌ Failed to load CSV: {e}")
+            return False
+
+        # Step 4: Token-based chunking (like your Colab)
+        logger.info("✂️ Splitting text into token-based chunks...")
+        text_splitter = TokenTextSplitter(
+            chunk_size=200,    # 200 tokens per chunk
+            chunk_overlap=20
+        )
+
+        documents = []
+        for _, row in df.iterrows():
+            try:
+                answer_text = str(row["answer"]) if pd.notna(row["answer"]) else ""
+                question_text = str(row["question"]) if pd.notna(row["question"]) else ""
                 
-        except Exception as e:
-            logger.error(f"❌ Failed to load data: {e}")
-            return False
-
-        # Step 4: Load embedding model
-        try:
-            embedding_model = self._get_embedding_model()
-        except Exception as e:
-            logger.error(f"❌ Failed to get embedding model: {e}")
-            return False
-
-        # Step 5: Import data to Weaviate
-        logger.info("💾 Adding documents to Weaviate...")
-        try:
-            batch_size = 20
-            successful_inserts = 0
-            
-            # Configure batch
-            self.client.batch.configure(batch_size=batch_size)
-            
-            with self.client.batch as batch:
-                for i, (_, row) in enumerate(df.iterrows()):
-                    try:
-                        text = str(row.get("answer", ""))
-                        if not text.strip():
-                            continue
-                            
-                        # Generate embedding
-                        embedding = embedding_model.encode(text).tolist()
-                        
-                        # Create data object
-                        data_object = {
-                            "question": str(row.get("question", "")),
-                            "answer": text,
+                if not answer_text.strip():
+                    continue
+                    
+                chunks = text_splitter.split_text(answer_text)
+                for chunk in chunks:
+                    doc = Document(
+                        page_content=chunk,
+                        metadata={
+                            "question": question_text,
+                            "answer": answer_text,
                             "is_augmented": False,
                             "source": "career_compass_dataset"
                         }
-                        
-                        # Add to batch
-                        batch.add_data_object(
-                            data_object=data_object,
-                            class_name="CareerKnowledge",
-                            vector=embedding
-                        )
-                        
-                        successful_inserts += 1
-                        
-                        if (i + 1) % 100 == 0:
-                            logger.info(f"📤 Processed {i + 1}/{len(df)} documents")
-                            
-                    except Exception as e:
-                        if i < 5:  # Log first few errors
-                            logger.warning(f"⚠️ Failed to process row {i}: {e}")
-                        continue
+                    )
+                    documents.append(doc)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to process row {_}: {e}")
+                continue
+
+        logger.info(f"📝 Prepared {len(documents)} chunks for embedding")
+
+        # Step 5: Initialize embeddings (like your Colab)
+        logger.info("🧠 Initializing embeddings...")
+        try:
+            embedding_model = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True}
+            )
+            logger.info("✅ Embeddings initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize embeddings: {e}")
+            return False
+
+        # Step 6: Create vector store (like your Colab)
+        logger.info("💾 Creating vector store...")
+        try:
+            self.vectorstore = WeaviateVectorStore(
+                client=self.client,
+                index_name="CareerKnowledge",
+                text_key="answer",
+                embedding=embedding_model,
+                attributes=["question", "answer", "is_augmented", "source"]
+            )
+            logger.info("✅ Vector store created")
+        except Exception as e:
+            logger.error(f"❌ Failed to create vector store: {e}")
+            return False
+
+        # Step 7: Add documents in batches
+        logger.info("📤 Adding documents to Weaviate...")
+        try:
+            batch_size = 100
+            total_documents = len(documents)
             
-            logger.info(f"✅ Successfully added {successful_inserts}/{len(df)} documents")
-            
-            if successful_inserts > 0:
-                self.is_initialized = True
-                logger.info("🎉 Career Compass RAG system is fully initialized and ready!")
-                return True
-            else:
-                logger.error("❌ No documents were successfully added")
-                return False
+            for i in range(0, total_documents, batch_size):
+                batch = documents[i:i + batch_size]
+                self.vectorstore.add_documents(documents=batch)
+                
+                if (i // batch_size) % 10 == 0 or i + batch_size >= total_documents:
+                    logger.info(f"   Added {min(i + batch_size, total_documents)}/{total_documents} chunks")
+
+            logger.info(f"✅ Added {total_documents} chunks to Weaviate Cloud")
+            self.is_initialized = True
+            logger.info("🎉 Career Compass RAG initialized successfully!")
+            return True
             
         except Exception as e:
             logger.error(f"❌ Error adding documents to Weaviate: {e}")
             return False
 
     def ask_question(self, question):
-        """Retrieve + Generate an answer using RAG"""
+        """Ask a question and get a synthesized RAG answer (like your Colab)."""
         try:
-            if not self.client or not self.is_initialized:
-                return {"answer": "Career guidance system is currently unavailable. Please try again later.", "confidence": "Error"}
+            if not self.vectorstore or not self.is_initialized:
+                return {
+                    "answer": "Career guidance system is currently unavailable. Please try again later.", 
+                    "confidence": "Error"
+                }
 
             logger.info(f"🤔 Processing question: {question}")
 
-            # Generate embedding for the question
-            embedding_model = self._get_embedding_model()
-            question_embedding = embedding_model.encode(question).tolist()
+            # Step 1: Retrieve relevant chunks (like your Colab)
+            results = self.vectorstore.similarity_search(query=question, k=5)
 
-            # Search in Weaviate
-            response = (
-                self.client.query
-                .get("CareerKnowledge", ["question", "answer", "source"])
-                .with_near_vector({"vector": question_embedding})
-                .with_limit(5)
-                .do()
-            )
+            if not results:
+                return {
+                    "answer": "I don't have enough information to answer that question. Please try asking about career paths, skills, or educational requirements.", 
+                    "confidence": "Low"
+                }
 
-            if "data" not in response or not response["data"]["Get"]["CareerKnowledge"]:
-                return {"answer": "I don't have enough information to answer that question. Please try asking about career paths, skills, or educational requirements.", "confidence": "Low"}
+            # Step 2: Build context (like your Colab)
+            context = "\n".join([doc.page_content for doc in results])
+            logger.info(f"🔍 Retrieved {len(results)} relevant chunks")
 
-            chunks = response["data"]["Get"]["CareerKnowledge"]
-            logger.info(f"🔍 Retrieved {len(chunks)} relevant chunks")
-            
-            context = "\n".join([chunk["answer"] for chunk in chunks])
-
+            # Step 3: Construct RAG prompt (like your Colab)
             prompt = f"""
-            You are Career Compass, a career guidance assistant.
+            You are Career Compass, a helpful career guidance assistant.
 
-            Use the context below to answer the question. If the context doesn't contain relevant information, say so.
+            Use the following context to answer the question. If the context doesn't contain relevant information, say so.
 
             Context:
             {context}
@@ -257,9 +225,9 @@ class CareerCompassWeaviate:
             Provide a helpful, career-focused answer based on the context:
             """
 
-            # Generate answer using OpenAI (compatible version)
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+            # Step 4: Call LLM (like your Colab)
+            response = self.llm_client.chat.completions.create(
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=300
@@ -271,26 +239,68 @@ class CareerCompassWeaviate:
             
             return {
                 "answer": final_answer,
-                "retrieved_chunks": len(chunks),
+                "retrieved_chunks": len(results),
                 "confidence": "High"
             }
 
         except Exception as e:
             logger.error(f"❌ Error in ask_question: {e}")
-            return {"answer": "Sorry, I'm having trouble processing your question right now. Please try again.", "confidence": "Error"}
+            return {
+                "answer": "Sorry, I'm having trouble processing your question right now. Please try again.", 
+                "confidence": "Error"
+            }
 
     def close_connection(self):
-        """Close connection to Weaviate"""
-        logger.info("🔌 Closing Weaviate connection")
+        """Close the connection."""
+        logger.info("🔌 Closing Weaviate connection...")
+        if self.client:
+            self.client.close()
+        logger.info("✅ Connection closed")
+
+# Test function (like your Colab)
+def test_rag_system():
+    """Test the RAG system with sample questions"""
+    system = CareerCompassWeaviate()
+    
+    # Try multiple dataset paths
+    dataset_paths = [
+        "app/final_merged_career_guidance.csv",
+        "./app/final_merged_career_guidance.csv", 
+        "final_merged_career_guidance.csv"
+    ]
+    
+    initialized = False
+    for path in dataset_paths:
+        if os.path.exists(path):
+            logger.info(f"📁 Testing with dataset: {path}")
+            if system.initialize_system(path):
+                initialized = True
+                break
+    
+    if not initialized:
+        logger.error("❌ Could not initialize RAG system with any dataset path")
+        return
+    
+    # Test questions (like your Colab)
+    test_questions = [
+        "What skills are important for AI engineers?",
+        "What are the main areas of specialization in a law degree",
+        "What skills are important to succeed as a law student?",
+        "How long does it typically take to complete a law degree in lebanon?",
+        "What courses are essential in a business management degree?",
+        "what is the best universities in lebanon"
+    ]
+    
+    for question in test_questions:
+        try:
+            response = system.ask_question(question)
+            logger.info(f"💡 Q: {question}")
+            logger.info(f"💡 A: {response['answer']}")
+            logger.info("---" * 20)
+        except Exception as e:
+            logger.error(f"❌ Error testing question '{question}': {e}")
+    
+    system.close_connection()
 
 if __name__ == "__main__":
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(base_dir, "final_merged_career_guidance.csv")
-
-    logger.info(f"📁 Looking for dataset at: {csv_path}")
-
-    system = CareerCompassWeaviate()
-    if system.initialize_system(csv_path):
-        response = system.ask_question("What skills are important for AI engineers?")
-        logger.info(f"💡 Answer: {response['answer']}")
-    system.close_connection()
+    test_rag_system()
