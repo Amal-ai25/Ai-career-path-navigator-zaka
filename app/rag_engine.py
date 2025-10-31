@@ -13,16 +13,14 @@ logger = logging.getLogger(__name__)
 
 class CareerCompassRAG:
     def __init__(self):
-        # Use direct API calls instead of OpenAI client
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.api_url = "https://api.openai.com/v1/chat/completions"
         self.career_data = None
         self.is_initialized = False
         
-        if not self.api_key:
-            logger.warning("⚠️ OPENAI_API_KEY not found")
-        else:
-            logger.info("✅ OpenAI API configured for direct requests")
+        logger.info(f"🔑 API Key available: {bool(self.api_key)}")
+        if self.api_key:
+            logger.info(f"🔑 API Key starts with: {self.api_key[:20]}...")
         
         logger.info("✅ Career RAG class created")
 
@@ -81,6 +79,7 @@ class CareerCompassRAG:
     def _call_openai_direct(self, prompt):
         """Make direct HTTP request to OpenAI API"""
         if not self.api_key:
+            logger.error("❌ No API key available")
             raise ValueError("OpenAI API key not available")
         
         headers = {
@@ -101,8 +100,13 @@ class CareerCompassRAG:
         }
         
         try:
+            logger.info("🔄 Making OpenAI API request...")
             response = requests.post(self.api_url, headers=headers, json=data, timeout=30)
-            response.raise_for_status()
+            logger.info(f"📡 Response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.error(f"❌ API Error {response.status_code}: {response.text}")
+                response.raise_for_status()
             
             result = response.json()
             return result["choices"][0]["message"]["content"].strip()
@@ -162,21 +166,23 @@ ANSWER:"""
 
             # Use direct OpenAI API call
             if self.api_key:
+                logger.info("🚀 Attempting to call OpenAI API...")
                 answer = self._call_openai_direct(prompt)
                 logger.info("✅ Successfully generated answer with OpenAI")
+                return {
+                    "answer": answer,
+                    "relevant_matches": len(relevant_data),
+                    "confidence": "High"
+                }
             else:
+                logger.error("❌ No API key available for OpenAI")
                 raise ValueError("OpenAI API key not available")
             
-            return {
-                "answer": answer,
-                "relevant_matches": len(relevant_data),
-                "confidence": "High"
-            }
-
         except Exception as e:
             logger.error(f"❌ RAG error: {e}")
+            logger.info("🔄 Falling back to dataset mode")
             # Enhanced fallback
-            return self._get_enhanced_fallback(question)
+            return self._get_enhanced_fallback(question, relevant_data)
 
     def _clean_text_for_prompt(self, text):
         """Clean text before sending to OpenAI to improve response quality"""
@@ -191,13 +197,14 @@ ANSWER:"""
         text = re.sub(r'\[.*?\]', '', text)
         text = re.sub(r'\(.*?\)', '', text)
         
-        # Take first 200 words to avoid overly long context
-        words = text.split()[:200]
+        # Take first 150 words to avoid overly long context
+        words = text.split()[:150]
         return ' '.join(words)
 
-    def _get_enhanced_fallback(self, question):
+    def _get_enhanced_fallback(self, question, relevant_data=None):
         """Enhanced fallback when OpenAI fails"""
-        relevant_data = self._find_relevant_qa(question, top_k=2)
+        if relevant_data is None:
+            relevant_data = self._find_relevant_qa(question, top_k=2)
         
         if relevant_data:
             # Use the best matching answer with cleaning
@@ -206,7 +213,7 @@ ANSWER:"""
             
             if len(clean_answer) > 50:
                 return {
-                    "answer": f"🎯 Based on career guidance information:\n\n{clean_answer}\n\n*Note: Using database information directly*",
+                    "answer": f"🎯 Based on career guidance information:\n\n{clean_answer}",
                     "confidence": "Medium"
                 }
         
