@@ -11,20 +11,23 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Import systems
+# Import the CLASS, not the instance
+try:
+    from app.rag_engine import CareerCompassRAG
+    logger.info("✅ RAG class imported")
+    # Create instance here to avoid circular imports
+    career_system = CareerCompassRAG()
+except Exception as e:
+    logger.error(f"RAG import failed: {e}")
+    career_system = None
+
+# Import ML system
 try:
     from app.utils.ml_utils import predict_major
     logger.info("✅ ML system imported")
 except Exception as e:
     logger.error(f"ML import failed: {e}")
     predict_major = None
-
-try:
-    from app.rag_engine import career_system
-    logger.info("✅ RAG system imported")
-except Exception as e:
-    logger.error(f"RAG import failed: {e}")
-    career_system = None
 
 # Static files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
