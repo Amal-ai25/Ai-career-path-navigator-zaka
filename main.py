@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import logging
+import os
 import uvicorn
 
 logging.basicConfig(level=logging.INFO)
@@ -20,9 +21,9 @@ except Exception as e:
 
 try:
     from app.rag_engine import career_system
-    logger.info("✅ Chat system imported")
+    logger.info("✅ RAG system imported")
 except Exception as e:
-    logger.error(f"Chat import failed: {e}")
+    logger.error(f"RAG import failed: {e}")
     career_system = None
 
 # Static files
@@ -31,8 +32,22 @@ templates = Jinja2Templates(directory="app/templates")
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("🚀 Career Compass started successfully!")
-    # No initialization needed - system is always ready
+    logger.info("🚀 Starting Career Compass...")
+    
+    # Initialize RAG system with your dataset
+    if career_system:
+        try:
+            dataset_path = "app/final_merged_career_guidance.csv"
+            if os.path.exists(dataset_path):
+                success = career_system.initialize_system(dataset_path)
+                if success:
+                    logger.info("✅ RAG system initialized with career dataset!")
+                else:
+                    logger.error("❌ RAG initialization failed")
+            else:
+                logger.error(f"❌ Dataset not found: {dataset_path}")
+        except Exception as e:
+            logger.error(f"Startup error: {e}")
 
 @app.get("/")
 async def home(request: Request):
@@ -57,11 +72,11 @@ async def ask_question(data: dict):
             response = career_system.ask_question(question)
             return {"answer": response["answer"]}
         else:
-            return {"answer": "Welcome to Career Compass! 🎓 I can help with career guidance and major selection."}
+            return {"answer": "Welcome to Career Compass! 🎓 I can help with career guidance using our career database."}
             
     except Exception as e:
         logger.error(f"Ask error: {e}")
-        return {"answer": "I'm here to help with career guidance! What questions do you have?"}
+        return {"answer": "I'm here to help with career guidance! Try asking about different majors or career paths."}
 
 @app.post("/predict")
 async def predict(
@@ -104,12 +119,14 @@ async def predict(
 
 @app.get("/health")
 async def health():
+    rag_ready = career_system is not None and career_system.is_initialized
+    
     return {
         "status": "healthy ✅",
         "service": "Career Compass",
-        "chat_ready": career_system is not None,
+        "rag_ready": rag_ready,
         "ml_ready": predict_major is not None,
-        "message": "All systems operational"
+        "message": "RAG system with career dataset" if rag_ready else "Basic system"
     }
 
 if __name__ == "__main__":
