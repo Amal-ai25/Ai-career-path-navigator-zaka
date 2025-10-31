@@ -130,11 +130,16 @@ async def predict(
 async def health():
     rag_ready = career_system is not None and getattr(career_system, 'is_initialized', False)
     
+    # Check ML system status
+    from app.utils.ml_utils import ml_models_loaded
+    ml_status = "ML Model Loaded" if ml_models_loaded else "Rule-Based Fallback"
+    
     return {
         "status": "healthy ✅",
-        "service": "Career Compass",
+        "service": "Career Compass", 
         "rag_ready": rag_ready,
-        "ml_ready": predict_major is not None
+        "ml_ready": predict_major is not None,
+        "ml_mode": ml_status
     }
 
 if __name__ == "__main__":
