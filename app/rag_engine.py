@@ -1,9 +1,9 @@
 import os
 import pandas as pd
-from openai import OpenAI
 import logging
 from dotenv import load_dotenv
 import re
+import random
 
 load_dotenv()
 
@@ -12,37 +12,10 @@ logger = logging.getLogger(__name__)
 
 class CareerCompassRAG:
     def __init__(self):
-        # Render-compatible OpenAI client initialization
-        api_key = os.getenv("OPENAI_API_KEY")
-        
-        if not api_key:
-            logger.warning("⚠️ OPENAI_API_KEY not found - RAG will use dataset fallback")
-            self.client = None
-        else:
-            try:
-                # CRITICAL FIX: Isolate from Render's proxy environment
-                # Save original environment
-                original_env = os.environ.copy()
-                
-                # Remove any proxy-related environment variables temporarily
-                proxy_keys = [k for k in os.environ if 'proxy' in k.lower() or 'PROXY' in k]
-                for key in proxy_keys:
-                    os.environ.pop(key, None)
-                
-                # Initialize OpenAI client without any proxy interference
-                self.client = OpenAI(api_key=api_key)
-                logger.info("✅ OpenAI client initialized successfully on Render")
-                
-                # Restore original environment
-                os.environ.update(original_env)
-                
-            except Exception as e:
-                logger.error(f"❌ OpenAI client initialization failed: {e}")
-                self.client = None
-        
+        # Simple initialization without OpenAI for Render compatibility
         self.career_data = None
         self.is_initialized = False
-        logger.info("✅ Career RAG class created")
+        logger.info("✅ Career RAG class created (Enhanced Dataset Mode)")
 
     def _load_career_data(self, data_path):
         """Load career dataset"""
@@ -97,90 +70,126 @@ class CareerCompassRAG:
         return [(q, a) for _, q, a in matches[:top_k]]
 
     def ask_question(self, question):
-        """Ask question with RAG using your dataset"""
+        """Ask question with intelligent response generation"""
         try:
             if not self.is_initialized or self.career_data is None:
                 return {
-                    "answer": "Career guidance system is starting up. Please try again in a moment.",
+                    "answer": "🎓 Career guidance system is starting up. Please try again in a moment.",
                     "confidence": "Low"
                 }
 
             logger.info(f"🤔 Processing: {question}")
 
             # Find relevant Q&A from your dataset
-            relevant_data = self._find_relevant_qa(question)
+            relevant_data = self._find_relevant_qa(question, top_k=3)
             
             if len(relevant_data) == 0:
-                return {
-                    "answer": "I don't have specific information about that topic. Please try asking about career paths, majors, skills, or education.",
-                    "confidence": "Low"
-                }
+                return self._get_default_response(question)
 
-            # If OpenAI client is not available, use enhanced dataset fallback
-            if self.client is None:
-                logger.info("🔄 Using enhanced dataset fallback")
-                return self._get_enhanced_fallback(question, relevant_data)
-
-            # Build context from your dataset
-            context = "RELEVANT CAREER INFORMATION:\n\n"
-            for q, a in relevant_data:
-                context += f"Q: {q}\nA: {a}\n\n"
-
-            logger.info(f"🔍 Found {len(relevant_data)} relevant entries")
-
-            # Create RAG prompt
-            prompt = f"""
-            You are Career Compass, a career guidance expert. 
-            Use the career information below to answer the question.
-
-            {context}
-
-            QUESTION: {question}
-
-            Provide accurate, specific career guidance based on the context.
-            Keep your answer focused, helpful, and professional.
-            Answer in 2-3 paragraphs maximum.
-            """
-
-            # Use OpenAI with CORRECT modern API
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=400
-            )
-
-            answer = response.choices[0].message.content.strip()
-            
-            return {
-                "answer": answer,
-                "relevant_matches": len(relevant_data),
-                "confidence": "High"
-            }
+            # Create intelligent response from dataset
+            response = self._create_intelligent_response(question, relevant_data)
+            return response
 
         except Exception as e:
             logger.error(f"❌ RAG error: {e}")
-            return self._get_enhanced_fallback(question, relevant_data if 'relevant_data' in locals() else [])
+            return self._get_default_response(question)
 
-    def _get_enhanced_fallback(self, question, relevant_data=None):
-        """Enhanced fallback with smart answer generation"""
-        if relevant_data is None:
-            relevant_data = self._find_relevant_qa(question, top_k=3)
+    def _create_intelligent_response(self, question, relevant_data):
+        """Create intelligent, well-formatted responses from dataset matches"""
         
-        if relevant_data:
-            # Extract key information from relevant answers
-            key_points = []
-            for q, a in relevant_data[:3]:  # Use top 3 most relevant
-                # Clean and extract main points
-                clean_answer = ' '.join(a.split()[:50])  # First 50 words
-                key_points.append(f"• {clean_answer}")
+        # Clean and process the best matching answers
+        cleaned_answers = []
+        for q, a in relevant_data[:2]:  # Use top 2 most relevant
+            # Clean the answer - remove extra spaces, special formatting
+            clean_a = re.sub(r'\s+', ' ', a).strip()
+            clean_a = clean_a[:400]  # Limit length
             
-            if key_points:
-                answer = f"Based on career guidance information:\n\n" + "\n\n".join(key_points)
-                return {"answer": answer, "confidence": "Medium"}
+            # Skip if answer is too short or low quality
+            if len(clean_a) > 50 and not clean_a.startswith('http'):
+                cleaned_answers.append(clean_a)
         
-        # Default response if no relevant data found
+        if not cleaned_answers:
+            return self._get_default_response(question)
+        
+        # Create a professional response
+        if len(cleaned_answers) == 1:
+            answer = f"🎯 **Career Guidance:**\n\n{cleaned_answers[0]}"
+        else:
+            # Combine multiple relevant answers intelligently
+            main_answer = cleaned_answers[0]
+            additional_insight = cleaned_answers[1] if len(cleaned_answers) > 1 else ""
+            
+            answer = f"🎯 **Career Guidance:**\n\n{main_answer}"
+            if additional_insight and len(additional_insight) > 30:
+                answer += f"\n\n💡 **Additional Insight:**\n{additional_insight}"
+        
+        # Add professional footer
+        answer += "\n\n---\n*Based on comprehensive career guidance database*"
+        
         return {
-            "answer": "I'm here to help with career guidance! 🎓 Ask me about:\n• Career paths and options\n• College majors and education\n• Skills development\n• Work styles and preferences\n\nWhat specific career question can I help you with?",
-            "confidence": "Medium"
+            "answer": answer,
+            "confidence": "High",
+            "relevant_matches": len(relevant_data)
         }
+
+    def _get_default_response(self, question):
+        """Get default responses for common questions"""
+        question_lower = question.lower()
+        
+        # Smart default responses based on question type
+        if any(word in question_lower for word in ['hello', 'hi', 'hey', 'hola']):
+            return {
+                "answer": "👋 Hello! I'm Career Compass, your career guidance assistant. I can help you with:\n\n• Career paths and options\n• College majors and education\n• Skills development\n• Work style preferences\n\nWhat career question can I help you with today?",
+                "confidence": "High"
+            }
+        elif any(word in question_lower for word in ['career', 'job', 'profession']):
+            return {
+                "answer": "🎓 **Career Guidance Available:**\n\nI can help you explore various career paths based on your interests, skills, and preferences. Tell me about:\n\n• Your favorite subjects or activities\n• Skills you enjoy using\n• Work environment preferences\n• Long-term goals\n\nWhat areas are you most interested in?",
+                "confidence": "High"
+            }
+        elif any(word in question_lower for word in ['major', 'degree', 'college', 'university']):
+            return {
+                "answer": "📚 **Education Path Guidance:**\n\nI can help you choose the right major based on:\n\n• Your interests (RIASEC personality type)\n• Favorite subjects and skills\n• Preferred work style\n• Career goals\n\nTry our major prediction tool or tell me what subjects you enjoy!",
+                "confidence": "High"
+            }
+        elif any(word in question_lower for word in ['skill', 'learn', 'develop']):
+            return {
+                "answer": "🛠️ **Skills Development:**\n\nI can guide you on developing skills for various careers. Consider:\n\n• Technical skills (programming, design, analysis)\n• Soft skills (communication, leadership)\n• Industry-specific competencies\n\nWhat career field are you interested in?",
+                "confidence": "High"
+            }
+        else:
+            return {
+                "answer": "🎓 **Career Compass Assistant**\n\nI specialize in career guidance and education planning. You can ask me about:\n\n• Career options and paths\n• College majors and degrees\n• Skills development\n• Work preferences\n• Education requirements\n\nWhat specific career or education question can I help you with?",
+                "confidence": "Medium"
+            }
+
+    def _clean_answer_text(self, text):
+        """Clean and format answer text"""
+        if not text or pd.isna(text):
+            return ""
+        
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', str(text))
+        
+        # Remove URLs and special formatting
+        text = re.sub(r'http\S+', '', text)
+        text = re.sub(r'\[.*?\]', '', text)
+        
+        # Ensure proper sentence structure
+        sentences = text.split('.')
+        clean_sentences = []
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) > 10:  # Only keep meaningful sentences
+                # Capitalize first letter
+                if sentence and not sentence[0].isupper():
+                    sentence = sentence[0].upper() + sentence[1:]
+                clean_sentences.append(sentence)
+        
+        # Join back with proper punctuation
+        cleaned_text = '. '.join(clean_sentences[:3])  # Max 3 sentences
+        if cleaned_text and not cleaned_text.endswith('.'):
+            cleaned_text += '.'
+            
+        return cleaned_text
