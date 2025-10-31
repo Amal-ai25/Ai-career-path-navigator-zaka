@@ -68,6 +68,8 @@ async def home(request: Request):
         "work_styles": work_styles
     })
 
+# In your main.py, update the ask_question endpoint:
+
 @app.post("/ask")
 async def ask_question(data: dict):
     try:
@@ -79,11 +81,11 @@ async def ask_question(data: dict):
             response = career_system.ask_question(question)
             return {"answer": response["answer"]}
         else:
-            return {"answer": "Welcome to Career Compass! 🎓 Ask me about careers, education paths, majors, or skills development."}
+            return {"answer": "👋 Welcome to Career Compass! 🎓\n\nI can help you with career guidance, education paths, major selection, and skills development.\n\nWhat would you like to know about your career future?"}
             
     except Exception as e:
         logger.error(f"Ask error: {e}")
-        return {"answer": "Career guidance system ready. What would you like to know about careers or education?"}
+        return {"answer": "🎓 Career guidance system ready. Ask me about careers, education, or skills development!"}
 
 @app.post("/predict")
 async def predict(
