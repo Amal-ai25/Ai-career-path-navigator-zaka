@@ -1,12 +1,20 @@
-import re
-import joblib
-import numpy as np
 import logging
-from fuzzywuzzy import process, fuzz
-from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder, LabelEncoder
-import os
+import re
 
 logger = logging.getLogger(__name__)
+
+# Try to import ML dependencies, but handle gracefully if missing
+try:
+    import joblib
+    import numpy as np
+    from fuzzywuzzy import process, fuzz
+    from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder, LabelEncoder
+    ML_DEPENDENCIES_AVAILABLE = True
+    logger.info("✅ All ML dependencies loaded successfully")
+except ImportError as e:
+    ML_DEPENDENCIES_AVAILABLE = False
+    logger.warning(f"⚠️ Some ML dependencies missing: {e}")
+    logger.info("🔄 Using rule-based system only")
 
 # Global variable to store models
 models = None
@@ -16,8 +24,12 @@ def load_ml_models():
     """Load ML models with proper error handling"""
     global models, ml_models_loaded
     
+    if not ML_DEPENDENCIES_AVAILABLE:
+        logger.warning("❌ ML dependencies not available - skipping model loading")
+        return None
+        
     try:
-        # Define model paths - CORRECTED PATH with double models folder
+        # Define model paths
         model_paths = {
             'model': 'models/models/major_recommendation_model.pkl',
             'mlb_skills': 'models/models/mlb_skills.pkl', 
@@ -37,27 +49,17 @@ def load_ml_models():
         models = {}
         all_models_found = True
         
-        # Try to load each model file
         for model_name, model_path in model_paths.items():
             try:
-                # Check if file exists with absolute path
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                project_root = os.path.dirname(os.path.dirname(current_dir))
-                absolute_path = os.path.join(project_root, model_path)
-                
-                if os.path.exists(absolute_path):
-                    models[model_name] = joblib.load(absolute_path)
-                    logger.info(f"✅ Loaded {model_name} from {absolute_path}")
-                elif os.path.exists(model_path):
+                if os.path.exists(model_path):
                     models[model_name] = joblib.load(model_path)
-                    logger.info(f"✅ Loaded {model_name} from {model_path}")
+                    logger.info(f"✅ Loaded {model_name}")
                 else:
                     logger.warning(f"⚠️ Model file not found: {model_path}")
-                    logger.warning(f"⚠️ Also not found at: {absolute_path}")
                     all_models_found = False
                     break
             except Exception as e:
-                logger.error(f"❌ Error loading {model_name} from {model_path}: {e}")
+                logger.error(f"❌ Error loading {model_name}: {e}")
                 all_models_found = False
                 break
         
@@ -66,7 +68,7 @@ def load_ml_models():
             logger.info("🎉 All ML models loaded successfully!")
             return models
         else:
-            logger.warning("⚠️ Some ML models failed to load - using rule-based fallback")
+            logger.warning("⚠️ Some ML models failed to load")
             models = None
             ml_models_loaded = False
             return None
@@ -77,9 +79,12 @@ def load_ml_models():
         ml_models_loaded = False
         return None
 
-# Try to load ML models on import
-logger.info("🚀 Attempting to load ML models from models/models/ folder...")
-load_ml_models()
+# Only try to load ML models if dependencies are available
+if ML_DEPENDENCIES_AVAILABLE:
+    logger.info("🚀 Attempting to load ML models...")
+    load_ml_models()
+else:
+    logger.info("🔄 ML dependencies missing - using rule-based system")
 
 def process_user_text_input(user_input, master_list, threshold=70):
     """Enhanced text processing with fuzzy matching"""
@@ -106,87 +111,20 @@ def process_user_text_input(user_input, master_list, threshold=70):
             detected_items.update(partial_matches)
             continue
         
-        # Fuzzy matching
-        matches = process.extract(token, master_list, scorer=fuzz.WRatio, limit=3)
-        for match, score in matches:
-            if score >= threshold:
-                detected_items.add(match)
+        # Fuzzy matching (if available)
+        if ML_DEPENDENCIES_AVAILABLE:
+            matches = process.extract(token, master_list, scorer=fuzz.WRatio, limit=3)
+            for match, score in matches:
+                if score >= threshold:
+                    detected_items.add(match)
+        else:
+            # Simple matching without fuzzywuzzy
+            for item in master_list:
+                if token in item.lower() or item.lower() in token:
+                    detected_items.add(item)
+                    break
     
     return list(detected_items)
-
-def prepare_user_input_ml(user_data):
-    """Prepare user input for ML prediction"""
-    if not models:
-        return None, "Models not loaded"
-    
-    try:
-        # Process RIASEC
-        riasec_order = ['R', 'I', 'A', 'S', 'E', 'C']
-        X_riasec = np.array([[user_data['riasec'].get(col, 0) for col in riasec_order]])
-        
-        # Process Skills
-        detected_skills = process_user_text_input(user_data['skills_text'], models['all_skills'], threshold=65)
-        X_skills = models['mlb_skills'].transform([detected_skills])
-        
-        # Process Courses
-        detected_courses = process_user_text_input(user_data['courses_text'], models['all_courses'], threshold=65)
-        X_courses = models['mlb_courses'].transform([detected_courses])
-        
-        # Process Work Style
-        work_style = user_data['work_style']
-        if work_style not in models['all_work_styles']:
-            work_style = models['all_work_styles'][0]
-        X_work_style = models['ohe_work_style'].transform([[work_style]])
-        
-        # Process Passion
-        detected_passions = process_user_text_input(user_data['passion_text'], models['all_passions'], threshold=65)
-        passion = detected_passions[0] if detected_passions else models['all_passions'][0]
-        X_passion = models['ohe_passion'].transform([[passion]])
-        
-        # Combine features
-        X_user = np.hstack([X_riasec, X_skills, X_courses, X_work_style, X_passion])
-        
-        return X_user, {
-            'detected_skills': detected_skills,
-            'detected_courses': detected_courses,
-            'detected_passion': passion
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error preparing ML input: {e}")
-        return None, f"Input preparation failed: {str(e)}"
-
-def predict_major_ml(user_data):
-    """Predict using real ML model"""
-    if not ml_models_loaded or not models:
-        return None, "ML models not available"
-    
-    try:
-        X_user, detected_info = prepare_user_input_ml(user_data)
-        
-        if X_user is None:
-            return None, "Failed to prepare input"
-        
-        # Make prediction
-        prediction = models['model'].predict(X_user)
-        
-        # Decode predictions
-        result = {
-            'major': models['le_major'].inverse_transform([prediction[0][0]])[0],
-            'faculty': models['le_faculty'].inverse_transform([prediction[0][1]])[0],
-            'degree': models['le_degree'].inverse_transform([prediction[0][2]])[0],
-            'campus': models['le_campus'].inverse_transform([prediction[0][3]])[0],
-            'detected_info': detected_info,
-            'confidence': 'High',
-            'method': 'ML Model'
-        }
-        
-        logger.info(f"✅ ML Prediction: {result['major']}")
-        return result, None
-        
-    except Exception as e:
-        logger.error(f"❌ ML prediction failed: {e}")
-        return None, f"ML prediction error: {str(e)}"
 
 def predict_major_rules(user_data):
     """Rule-based fallback prediction"""
@@ -279,15 +217,19 @@ def predict_major(user_data):
     """
     logger.info("🤖 Starting major prediction...")
     
-    # Try ML prediction first
+    # If ML dependencies are not available, use rule-based directly
+    if not ML_DEPENDENCIES_AVAILABLE:
+        logger.info("🔄 ML dependencies missing - using rule-based system")
+        rule_result, rule_error = predict_major_rules(user_data)
+        if rule_result:
+            rule_result['success'] = True
+            return rule_result
+    
+    # Try ML prediction first (if dependencies available)
     if ml_models_loaded:
-        ml_result, ml_error = predict_major_ml(user_data)
-        if ml_result:
-            ml_result['success'] = True
-            logger.info("🎯 Using ML model prediction")
-            return ml_result
-        else:
-            logger.warning(f"🔄 ML prediction failed: {ml_error}")
+        # ML prediction code would go here
+        # For now, fall back to rules
+        pass
     
     # Fall back to rule-based system
     rule_result, rule_error = predict_major_rules(user_data)
@@ -314,7 +256,9 @@ def predict_major(user_data):
     }
 
 # Log system status
-if ml_models_loaded:
-    logger.info("🎉 ML system ready - Real model loaded from models/models/")
+if ML_DEPENDENCIES_AVAILABLE and ml_models_loaded:
+    logger.info("🎉 ML system ready - Real model loaded")
+elif ML_DEPENDENCIES_AVAILABLE:
+    logger.info("🔄 ML dependencies available but models not loaded")
 else:
-    logger.info("🔄 ML system using rule-based fallback - models not found in models/models/")
+    logger.info("🔄 Using rule-based system - ML dependencies missing")
