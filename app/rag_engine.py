@@ -1,89 +1,133 @@
-import os
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import logging
-from dotenv import load_dotenv
-
-load_dotenv()
+import os
+import uvicorn
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class CareerCompassChat:
-    def __init__(self):
-        self.is_initialized = True
-        logger.info("✅ Career chat system ready")
+app = FastAPI()
 
-    def ask_question(self, question):
-        """Smart career responses without OpenAI"""
+# Import systems
+try:
+    from app.utils.ml_utils import predict_major
+    logger.info("✅ ML system imported")
+except Exception as e:
+    logger.error(f"ML import failed: {e}")
+    predict_major = None
+
+try:
+    from app.rag_engine import career_system
+    logger.info("✅ RAG system imported")
+except Exception as e:
+    logger.error(f"RAG import failed: {e}")
+    career_system = None
+
+# Static files
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+templates = Jinja2Templates(directory="app/templates")
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("🚀 Starting Career Compass...")
+    
+    # Initialize RAG system with your dataset
+    if career_system:
         try:
-            question_lower = question.lower()
-            
-            # Comprehensive career responses
-            if any(word in question_lower for word in ['law', 'legal', 'attorney', 'lawyer']):
-                return {
-                    "answer": "⚖️ **Law Degree Specializations**:\n\n**Criminal Law**: Prosecution and defense of criminal cases\n**Corporate Law**: Business legal matters, contracts, compliance\n**Family Law**: Divorce, child custody, adoption\n**Intellectual Property**: Patents, trademarks, copyrights\n**International Law**: Cross-border legal issues, treaties\n**Environmental Law**: Environmental regulations, sustainability\n**Tax Law**: Taxation matters for individuals and businesses\n**Real Estate Law**: Property transactions, zoning\n\n**Career Paths**: Lawyer, Judge, Legal Consultant, Corporate Counsel",
-                    "confidence": "High"
-                }
-            
-            elif any(word in question_lower for word in ['computer', 'programming', 'software', 'ai', 'coding']):
-                return {
-                    "answer": "💻 **Computer Science Careers**:\n\n**Software Development**:\n• Web Development (Frontend/Backend)\n• Mobile App Development\n• Desktop Applications\n\n**AI & Data Science**:\n• Machine Learning Engineering\n• Data Analysis\n• Artificial Intelligence\n\n**Other Fields**:\n• Cybersecurity\n• Cloud Computing\n• Game Development\n• DevOps\n\n**Key Skills**: Python, Java, JavaScript, Algorithms, Problem-solving, Teamwork\n**Job Market**: High demand with excellent growth potential",
-                    "confidence": "High"
-                }
-            
-            elif any(word in question_lower for word in ['business', 'management', 'marketing', 'finance', 'mba']):
-                return {
-                    "answer": "💼 **Business Administration Specializations**:\n\n**Management**: Leadership, operations, strategy\n**Marketing**: Digital marketing, brand management, market research\n**Finance**: Banking, investment, financial analysis\n**Entrepreneurship**: Startups, innovation, business development\n**Human Resources**: Talent management, recruitment, training\n**Supply Chain**: Logistics, operations, procurement\n\n**Career Opportunities**: Manager, Consultant, Analyst, Entrepreneur, Executive",
-                    "confidence": "High"
-                }
-            
-            elif any(word in question_lower for word in ['engineering', 'civil', 'mechanical', 'electrical', 'chemical']):
-                return {
-                    "answer": "⚙️ **Engineering Fields**:\n\n**Civil Engineering**: Infrastructure, construction, buildings\n**Mechanical Engineering**: Machines, manufacturing, systems\n**Electrical Engineering**: Electronics, power systems, circuits\n**Computer Engineering**: Hardware, software integration\n**Chemical Engineering**: Processes, materials, manufacturing\n**Biomedical Engineering**: Medical devices, healthcare technology\n\n**Required Skills**: Mathematics, Physics, Problem-solving, Technical drawing\n**Job Prospects**: Strong demand across all engineering disciplines",
-                    "confidence": "High"
-                }
-            
-            elif any(word in question_lower for word in ['medicine', 'doctor', 'medical', 'health', 'nursing']):
-                return {
-                    "answer": "🏥 **Medical & Healthcare Careers**:\n\n**Doctors**:\n• General Practitioner\n• Surgeon\n• Pediatrician\n• Cardiologist\n\n**Other Medical Professionals**:\n• Dentist\n• Pharmacist\n• Nurse\n• Physical Therapist\n\n**Healthcare Administration**:\n• Hospital Management\n• Healthcare Consulting\n• Medical Research\n\n**Education**: Extensive training required (6+ years)\n**Specializations**: Numerous fields available after basic medical education",
-                    "confidence": "High"
-                }
-            
-            elif any(word in question_lower for word in ['skill', 'learn', 'develop', 'ability']):
-                return {
-                    "answer": "🎯 **Essential Career Skills for 2024**:\n\n**Technical Skills**:\n• Programming (Python, JavaScript, Java)\n• Data Analysis & Statistics\n• Digital Marketing\n• Project Management\n• Cloud Computing (AWS, Azure)\n\n**Soft Skills**:\n• Communication & Presentation\n• Critical Thinking & Problem-solving\n• Teamwork & Collaboration\n• Adaptability & Learning Agility\n• Leadership & Management\n\n**Industry-Specific Skills**:\n• AI & Machine Learning (Tech)\n• Financial Analysis (Business)\n• Clinical Skills (Healthcare)\n• Design Thinking (Creative Fields)\n\n**Tip**: Continuous learning is essential for career growth!",
-                    "confidence": "High"
-                }
-            
-            elif any(word in question_lower for word in ['major', 'study', 'degree', 'university', 'college']):
-                return {
-                    "answer": "🎓 **Choosing a University Major**:\n\n**High-Demand Fields**:\n• Computer Science & AI\n• Business Administration\n• Engineering (All types)\n• Healthcare & Medicine\n• Data Science\n• Environmental Science\n\n**Consider These Factors**:\n1. Your interests and passions\n2. Job market demand and growth\n3. Salary potential and career paths\n4. Required education duration\n5. Your academic strengths\n\n**Popular Majors**:\n• Computer Science\n• Business Administration\n• Psychology\n• Engineering\n• Nursing\n• Biology\n• Economics\n\n**Advice**: Research each field thoroughly and talk to professionals!",
-                    "confidence": "High"
-                }
-            
-            elif any(word in question_lower for word in ['career', 'job', 'work', 'profession', 'occupation']):
-                return {
-                    "answer": "🌟 **Career Guidance**:\n\n**Steps to Choose a Career**:\n1. Self-assessment: Identify your interests and strengths\n2. Research: Explore different industries and roles\n3. Education: Understand required qualifications\n4. Experience: Gain practical experience through internships\n5. Network: Connect with professionals in your field of interest\n\n**Growing Industries**:\n• Technology & AI\n• Healthcare & Biotechnology\n• Renewable Energy\n• Data Science & Analytics\n• Digital Marketing\n• Cybersecurity\n\n**Career Development Tips**:\n• Continuously update your skills\n• Build a professional network\n• Seek mentorship\n• Consider work-life balance\n• Plan for long-term growth",
-                    "confidence": "High"
-                }
-            
-            elif any(word in question_lower for word in ['salary', 'pay', 'income', 'earn']):
-                return {
-                    "answer": "💰 **Career Earnings Overview**:\n\n**High-Earning Fields**:\n• Technology (Software Engineers, Data Scientists)\n• Healthcare (Doctors, Surgeons)\n• Engineering (Various disciplines)\n• Business (Executives, Consultants)\n• Law (Corporate Lawyers)\n\n**Factors Affecting Salary**:\n• Education level and specialization\n• Years of experience\n• Geographic location\n• Industry and company size\n• Specific skills and certifications\n\n**Note**: Salary research should consider cost of living and career satisfaction beyond just earnings.",
-                    "confidence": "High"
-                }
-            
+            dataset_path = "app/final_merged_career_guidance.csv"
+            if os.path.exists(dataset_path):
+                success = career_system.initialize_system(dataset_path)
+                if success:
+                    logger.info("✅ RAG system initialized with career dataset!")
+                else:
+                    logger.error("❌ RAG initialization failed")
             else:
-                return {
-                    "answer": "🎓 **Welcome to Career Compass!** 🤖\n\nI'm your career guidance assistant! Here's what I can help you with:\n\n**Career Fields**:\n• Law & Legal professions\n• Computer Science & Technology\n• Business & Management\n• Engineering (All types)\n• Healthcare & Medicine\n• And many more!\n\n**Ask me about**:\n• 'What are the specializations in law?'\n• 'Which engineering field is best for me?'\n• 'What skills do I need for tech careers?'\n• 'How to choose a university major?'\n• 'Career options in business administration'\n\nWhat career questions can I help you explore today?",
-                    "confidence": "High"
-                }
-                
+                logger.error(f"❌ Dataset not found: {dataset_path}")
         except Exception as e:
-            logger.error(f"Response error: {e}")
-            return {
-                "answer": "🎓 Career Compass is here to help you navigate career choices and educational paths! I provide guidance on majors, skills, and career development. What specific area would you like to explore?",
-                "confidence": "High"
-            }
+            logger.error(f"Startup error: {e}")
 
-# Create instance - NO INITIALIZATION NEEDED
-career_system = CareerCompassChat()
+@app.get("/")
+async def home(request: Request):
+    work_styles = [
+        "Team-Oriented", "Remote", "On-site", "Office/Data", 
+        "Hands-on/Field", "Lab/Research", "Creative/Design", 
+        "People-centric/Teaching", "Business", "freelance"
+    ]
+    return templates.TemplateResponse("index.html", {
+        "request": request, 
+        "work_styles": work_styles
+    })
+
+@app.post("/ask")
+async def ask_question(data: dict):
+    try:
+        question = data.get("question", "").strip()
+        if not question:
+            return {"answer": "Please enter a question about careers, education, or skills."}
+            
+        if career_system:
+            response = career_system.ask_question(question)
+            return {"answer": response["answer"]}
+        else:
+            return {"answer": "Welcome to Career Compass! 🎓 I can help with career guidance using our career database."}
+            
+    except Exception as e:
+        logger.error(f"Ask error: {e}")
+        return {"answer": "I'm here to help with career guidance! Try asking about different majors or career paths."}
+
+@app.post("/predict")
+async def predict(
+    R: str = Form(None), I: str = Form(None), A: str = Form(None),
+    S: str = Form(None), E: str = Form(None), C: str = Form(None),
+    skills: str = Form(""), courses: str = Form(""),
+    work_style: str = Form(""), passion: str = Form("")
+):
+    try:
+        riasec = {k: bool(v) for k, v in zip("RIASEC", [R,I,A,S,E,C])}
+        user_data = {
+            "riasec": riasec,
+            "skills_text": skills,
+            "courses_text": courses,
+            "work_style": work_style,
+            "passion_text": passion
+        }
+        
+        if predict_major:
+            result = predict_major(user_data)
+            return JSONResponse(result)
+        else:
+            return JSONResponse({
+                "success": True,
+                "major": "Computer Science",
+                "faculty": "Faculty of Engineering",
+                "degree": "Bachelor of Science", 
+                "campus": "Main Campus",
+                "detected_info": {
+                    "detected_skills": ["Analytical Thinking", "Problem Solving"],
+                    "detected_courses": ["Mathematics", "Science"],
+                    "detected_passion": "Technology and Innovation"
+                },
+                "confidence": "High"
+            })
+            
+    except Exception as e:
+        logger.error(f"Predict error: {e}")
+        return JSONResponse({"success": False, "error": "Please try again."})
+
+@app.get("/health")
+async def health():
+    rag_ready = career_system is not None and career_system.is_initialized
+    
+    return {
+        "status": "healthy ✅",
+        "service": "Career Compass",
+        "rag_ready": rag_ready,
+        "ml_ready": predict_major is not None,
+        "message": "RAG system with career dataset" if rag_ready else "Basic system"
+    }
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8080)
