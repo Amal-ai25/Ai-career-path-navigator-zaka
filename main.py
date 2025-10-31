@@ -15,13 +15,14 @@ app = FastAPI()
 career_system = None
 predict_major = None
 
-# Import and create RAG system
+# Import and create RAG system with better error handling
 try:
     from app.rag_engine import CareerCompassRAG
     career_system = CareerCompassRAG()
     logger.info("✅ RAG system created successfully")
 except Exception as e:
-    logger.error(f"RAG creation failed: {e}")
+    logger.error(f"❌ RAG creation failed: {e}")
+    career_system = None
 
 # Import ML system
 try:
@@ -53,7 +54,7 @@ async def startup_event():
         except Exception as e:
             logger.error(f"Startup error: {e}")
     else:
-        logger.error("❌ RAG system not available")
+        logger.warning("⚠️ RAG system not available - running in basic mode")
 
 @app.get("/")
 async def home(request: Request):
@@ -74,15 +75,15 @@ async def ask_question(data: dict):
         if not question:
             return {"answer": "Please enter a question."}
             
-        if career_system:
+        if career_system and getattr(career_system, 'is_initialized', False):
             response = career_system.ask_question(question)
             return {"answer": response["answer"]}
         else:
-            return {"answer": "Welcome to Career Compass! 🎓 Ask me about careers and education."}
+            return {"answer": "Welcome to Career Compass! 🎓 Ask me about careers, education paths, majors, or skills development."}
             
     except Exception as e:
         logger.error(f"Ask error: {e}")
-        return {"answer": "Career guidance system ready. What would you like to know?"}
+        return {"answer": "Career guidance system ready. What would you like to know about careers or education?"}
 
 @app.post("/predict")
 async def predict(
