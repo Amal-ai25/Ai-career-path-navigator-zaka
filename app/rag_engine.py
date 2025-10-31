@@ -12,11 +12,11 @@ logger = logging.getLogger(__name__)
 
 class CareerCompassRAG:
     def __init__(self):
-        # Set API key directly - no Client initialization
+        # Set API key directly
         openai.api_key = os.getenv("OPENAI_API_KEY")
         self.career_data = None
         self.is_initialized = False
-        logger.info("✅ Career RAG system initializing")
+        logger.info("✅ Career RAG class created")
 
     def _load_career_data(self, data_path):
         """Load career dataset"""
@@ -85,39 +85,31 @@ class CareerCompassRAG:
             relevant_data = self._find_relevant_qa(question)
             
             if len(relevant_data) == 0:
-                # No relevant data found
                 return {
-                    "answer": "I don't have specific information about that topic in my career database. Please try asking about career paths, majors, skills, or educational requirements.",
+                    "answer": "I don't have specific information about that topic. Please try asking about career paths, majors, skills, or education.",
                     "confidence": "Low"
                 }
 
             # Build context from your dataset
-            context = "RELEVANT CAREER INFORMATION FROM DATABASE:\n\n"
+            context = "RELEVANT CAREER INFORMATION:\n\n"
             for q, a in relevant_data:
                 context += f"Q: {q}\nA: {a}\n\n"
 
-            logger.info(f"🔍 Found {len(relevant_data)} relevant entries from dataset")
+            logger.info(f"🔍 Found {len(relevant_data)} relevant entries")
 
             # Create RAG prompt
             prompt = f"""
             You are Career Compass, a career guidance expert. 
-            Use the career information below from our database to answer the user's question.
+            Use the career information below to answer the question.
 
             {context}
 
-            USER QUESTION: {question}
+            QUESTION: {question}
 
-            INSTRUCTIONS:
-            - Use the information above as your primary source
-            - Provide accurate, specific career guidance based on the context
-            - If the context doesn't fully answer, supplement with general career knowledge
-            - Focus on practical, actionable advice
-            - Be comprehensive but concise
-
-            ANSWER:
+            Provide accurate, specific career guidance based on the context.
             """
 
-            # Use OpenAI with simple API call
+            # Use OpenAI
             response = openai.ChatCompletion.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
@@ -130,13 +122,11 @@ class CareerCompassRAG:
             return {
                 "answer": answer,
                 "relevant_matches": len(relevant_data),
-                "confidence": "High",
-                "source": "Career Database RAG"
+                "confidence": "High"
             }
 
         except Exception as e:
             logger.error(f"❌ RAG error: {e}")
-            # Fallback to dataset answers
             return self._get_fallback_from_dataset(question)
 
     def _get_fallback_from_dataset(self, question):
@@ -147,10 +137,9 @@ class CareerCompassRAG:
             answer = "Based on career database:\n\n"
             for q, a in relevant_data:
                 answer += f"• {a}\n"
-            return {"answer": answer, "confidence": "Medium", "source": "Dataset Only"}
+            return {"answer": answer, "confidence": "Medium"}
         else:
             return {
-                "answer": "I'm here to help with career guidance! Please ask about careers, education, majors, or skills development.",
-                "confidence": "Medium",
-                "source": "Career Assistant"
+                "answer": "I'm here to help with career guidance! Please ask about careers, education, majors, or skills.",
+                "confidence": "Medium"
             }
