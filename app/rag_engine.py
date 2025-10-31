@@ -154,6 +154,3 @@ class CareerCompassRAG:
                 "confidence": "Medium",
                 "source": "Career Assistant"
             }
-
-# Create instance
-career_system = CareerCompassRAG()
