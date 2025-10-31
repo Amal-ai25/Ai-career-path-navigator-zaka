@@ -12,13 +12,34 @@ logger = logging.getLogger(__name__)
 
 class CareerCompassRAG:
     def __init__(self):
-        # Initialize OpenAI client with API key - SIMPLE version
+        # Render-compatible OpenAI client initialization
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.error("❌ OPENAI_API_KEY not found in environment variables")
-            raise ValueError("OpenAI API key is required")
         
-        self.client = OpenAI(api_key=api_key)
+        if not api_key:
+            logger.warning("⚠️ OPENAI_API_KEY not found - RAG will use dataset fallback")
+            self.client = None
+        else:
+            try:
+                # CRITICAL FIX: Isolate from Render's proxy environment
+                # Save original environment
+                original_env = os.environ.copy()
+                
+                # Remove any proxy-related environment variables temporarily
+                proxy_keys = [k for k in os.environ if 'proxy' in k.lower() or 'PROXY' in k]
+                for key in proxy_keys:
+                    os.environ.pop(key, None)
+                
+                # Initialize OpenAI client without any proxy interference
+                self.client = OpenAI(api_key=api_key)
+                logger.info("✅ OpenAI client initialized successfully on Render")
+                
+                # Restore original environment
+                os.environ.update(original_env)
+                
+            except Exception as e:
+                logger.error(f"❌ OpenAI client initialization failed: {e}")
+                self.client = None
+        
         self.career_data = None
         self.is_initialized = False
         logger.info("✅ Career RAG class created")
@@ -95,6 +116,11 @@ class CareerCompassRAG:
                     "confidence": "Low"
                 }
 
+            # If OpenAI client is not available, use enhanced dataset fallback
+            if self.client is None:
+                logger.info("🔄 Using enhanced dataset fallback")
+                return self._get_enhanced_fallback(question, relevant_data)
+
             # Build context from your dataset
             context = "RELEVANT CAREER INFORMATION:\n\n"
             for q, a in relevant_data:
@@ -134,29 +160,27 @@ class CareerCompassRAG:
 
         except Exception as e:
             logger.error(f"❌ RAG error: {e}")
-            return self._get_fallback_from_dataset(question)
+            return self._get_enhanced_fallback(question, relevant_data if 'relevant_data' in locals() else [])
 
-    def _get_fallback_from_dataset(self, question):
-        """Fallback: return answers directly from dataset"""
-        relevant_data = self._find_relevant_qa(question, top_k=3)
+    def _get_enhanced_fallback(self, question, relevant_data=None):
+        """Enhanced fallback with smart answer generation"""
+        if relevant_data is None:
+            relevant_data = self._find_relevant_qa(question, top_k=3)
         
         if relevant_data:
-            # Clean up the answers - remove duplicates and truncate
-            unique_answers = []
-            seen_answers = set()
+            # Extract key information from relevant answers
+            key_points = []
+            for q, a in relevant_data[:3]:  # Use top 3 most relevant
+                # Clean and extract main points
+                clean_answer = ' '.join(a.split()[:50])  # First 50 words
+                key_points.append(f"• {clean_answer}")
             
-            for q, a in relevant_data:
-                # Clean the answer text - take first 200 chars
-                clean_a = a.strip()[:200] + "..." if len(a) > 200 else a.strip()
-                if clean_a and clean_a not in seen_answers:
-                    seen_answers.add(clean_a)
-                    unique_answers.append(clean_a)
-            
-            if unique_answers:
-                answer = "Based on career guidance information:\n\n" + "\n\n".join(unique_answers[:2])
+            if key_points:
+                answer = f"Based on career guidance information:\n\n" + "\n\n".join(key_points)
                 return {"answer": answer, "confidence": "Medium"}
         
+        # Default response if no relevant data found
         return {
-            "answer": "I'm here to help with career guidance! Please ask about careers, education, majors, or skills development.",
+            "answer": "I'm here to help with career guidance! 🎓 Ask me about:\n• Career paths and options\n• College majors and education\n• Skills development\n• Work styles and preferences\n\nWhat specific career question can I help you with?",
             "confidence": "Medium"
         }
