@@ -5,22 +5,12 @@ python-multipart==0.0.6
 jinja2==3.1.2
 python-dotenv==1.0.0
 
-# OpenAI
+# OpenAI only
 openai==1.3.0
-
-# Weaviate - STABLE VERSION
-weaviate-client==3.26.2
 
 # Basic data processing
 pandas==2.0.3
 numpy==1.24.3
-joblib==1.3.2
 
-# Text processing
-sentence-transformers==2.2.2
-
-# NLP
-fuzzywuzzy==0.18.0
-python-levenshtein==0.21.1
-
-# NOTE: Removed scikit-learn temporarily to avoid compatibility issues
+# NOTE: Removed ALL ML/Weaviate dependencies temporarily
+# We'll use direct OpenAI for everything
