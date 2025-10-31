@@ -10,15 +10,15 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class CareerCompassRAG:
+class CareerCompassChat:
     def __init__(self):
         self.llm_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.career_data = None
         self.is_initialized = False
-        logger.info("✅ Career RAG system initializing")
+        logger.info("✅ Career chat system initializing")
 
     def _load_career_data(self, data_path):
-        """Load career data without embeddings"""
+        """Load career data"""
         try:
             if not os.path.exists(data_path):
                 logger.error(f"❌ Dataset not found: {data_path}")
@@ -32,17 +32,17 @@ class CareerCompassRAG:
             return False
 
     def initialize_system(self, data_path):
-        """Initialize the simple RAG system"""
-        logger.info("🚀 Initializing Simple Career RAG...")
+        """Initialize the system"""
+        logger.info("🚀 Initializing Career System...")
         
         if self._load_career_data(data_path):
             self.is_initialized = True
-            logger.info("🎉 Career RAG initialized successfully!")
+            logger.info("🎉 Career system initialized successfully!")
             return True
         return False
 
-    def _find_relevant_qa(self, question, top_k=5):
-        """Find relevant Q&A using simple keyword matching"""
+    def _find_relevant_content(self, question):
+        """Simple keyword matching for relevant content"""
         if self.career_data is None:
             return []
         
@@ -56,59 +56,59 @@ class CareerCompassRAG:
                 q_text = str(row['question']).lower()
                 a_text = str(row['answer']).lower()
                 
-                # Calculate simple match score
-                q_match = len(question_words.intersection(set(re.findall(r'\b\w+\b', q_text))))
-                a_match = len(question_words.intersection(set(re.findall(r'\b\w+\b', a_text))))
+                # Simple keyword matching
+                q_match = sum(1 for word in question_words if word in q_text)
+                a_match = sum(1 for word in question_words if word in a_text)
                 
-                total_score = q_match * 3 + a_match  # Weight question matches higher
+                total_score = q_match * 3 + a_match
                 
                 if total_score > 0:
-                    matches.append((total_score, idx, row))
+                    matches.append((total_score, row['question'], row['answer']))
         
-        # Sort by score and return top matches
+        # Sort by score and return top 3
         matches.sort(reverse=True, key=lambda x: x[0])
-        return [match[2] for match in matches[:top_k]]
+        return [(q, a) for _, q, a in matches[:3]]
 
     def ask_question(self, question):
-        """Ask question with simple keyword-based RAG"""
+        """Ask question with career context"""
         try:
-            if not self.is_initialized or self.career_data is None:
-                return self._ask_direct_openai(question)
+            if not self.is_initialized:
+                return self._get_smart_response(question)
 
             logger.info(f"🤔 Processing: {question}")
 
-            # Find relevant Q&A using keyword matching
-            relevant_data = self._find_relevant_qa(question)
+            # Find relevant content
+            relevant_content = self._find_relevant_content(question)
             
-            if len(relevant_data) == 0:
-                # No relevant data found, use direct OpenAI with career context
-                return self._ask_career_openai(question)
-
-            # Build context from relevant questions
-            context = "RELEVANT CAREER KNOWLEDGE:\n"
-            for row in relevant_data:
-                context += f"Q: {row['question']}\nA: {row['answer']}\n\n"
-
-            logger.info(f"🔍 Found {len(relevant_data)} relevant Q&A pairs")
-
-            # Smart prompt for better answers
-            prompt = f"""
-            You are Career Compass, an expert career guidance assistant. 
-            Use the career knowledge below to answer the user's question.
-
-            {context}
-
-            USER QUESTION: {question}
-
-            INSTRUCTIONS:
-            1. Use the career knowledge above as your primary source
-            2. Provide specific, practical advice based on the context
-            3. If the context doesn't fully answer, supplement with your career expertise
-            4. Focus on actionable guidance and clear explanations
-            5. Keep answers comprehensive but concise
-
-            ANSWER:
-            """
+            if relevant_content:
+                # Build context from relevant content
+                context = "Related career information:\n"
+                for q, a in relevant_content:
+                    context += f"Q: {q}\nA: {a}\n\n"
+                
+                prompt = f"""
+                You are Career Compass, a career guidance expert.
+                
+                {context}
+                
+                Based on the above information and your expertise, answer this question:
+                {question}
+                
+                Provide helpful, specific career guidance.
+                """
+            else:
+                # No relevant content found, use career expert mode
+                prompt = f"""
+                You are Career Compass, a career guidance expert specializing in:
+                - Career paths and job markets
+                - University majors and education  
+                - Skill development
+                - Professional advice
+                
+                Question: {question}
+                
+                Provide comprehensive career guidance.
+                """
 
             response = self.llm_client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -121,96 +121,59 @@ class CareerCompassRAG:
             
             return {
                 "answer": answer,
-                "relevant_matches": len(relevant_data),
-                "confidence": "High",
-                "source": "Career Database + GPT-4o-mini"
+                "confidence": "High"
             }
 
         except Exception as e:
-            logger.error(f"❌ RAG error: {e}")
-            return self._ask_direct_openai(question)
+            logger.error(f"Chat error: {e}")
+            return self._get_smart_response(question)
 
-    def _ask_career_openai(self, question):
-        """OpenAI with career expert context"""
-        try:
-            prompt = f"""
-            You are Career Compass, a career guidance expert specializing in:
-            - Career paths and job markets
-            - University majors and education
-            - Skill development and certifications
-            - Lebanese university context
-            - Professional development advice
-
-            Question: {question}
-
-            Provide specific, practical career guidance based on your expertise.
-            """
-            
-            response = self.llm_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=350
-            )
-
-            return {
-                "answer": response.choices[0].message.content.strip(),
-                "confidence": "Medium",
-                "source": "Career Expert GPT-4o-mini"
-            }
-        except Exception as e:
-            logger.error(f"Direct OpenAI error: {e}")
-            return self._get_fallback_response(question)
-
-    def _ask_direct_openai(self, question):
-        """Simple direct OpenAI fallback"""
-        try:
-            response = self.llm_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": question}],
-                temperature=0.3,
-                max_tokens=300
-            )
-
-            return {
-                "answer": response.choices[0].message.content.strip(),
-                "confidence": "Medium", 
-                "source": "Direct GPT-4o-mini"
-            }
-        except Exception as e:
-            logger.error(f"OpenAI error: {e}")
-            return self._get_fallback_response(question)
-
-    def _get_fallback_response(self, question):
-        """Intelligent fallback responses"""
+    def _get_smart_response(self, question):
+        """Smart fallback responses"""
         question_lower = question.lower()
         
-        fallbacks = {
-            'law': "Law degrees offer specializations like Criminal Law, Corporate Law, Family Law, Intellectual Property, and International Law. Each has different career paths and requirements.",
-            'computer': "Computer Science leads to careers in software development, AI, data science, cybersecurity, and more. Key skills include programming, algorithms, and problem-solving.",
-            'business': "Business majors can specialize in Management, Marketing, Finance, or Entrepreneurship. These lead to diverse careers in various industries.",
-            'engineering': "Engineering fields include Civil, Mechanical, Electrical, Computer, and Chemical Engineering. Each requires specific technical skills and offers different career opportunities.",
-            'medicine': "Medical careers include Doctors, Surgeons, Dentists, Pharmacists, and Healthcare Administrators. These require extensive education and specialized training.",
-            'skill': "Important career skills include communication, problem-solving, technical expertise, adaptability, and leadership. Continuous learning is key for career growth.",
-            'career': "Consider your interests, skills, job market demand, and education requirements when choosing a career path. Research different fields and talk to professionals.",
-            'major': "Popular majors include Computer Science, Business, Engineering, Healthcare, and Social Sciences. Choose based on your interests and career goals.",
-            'lebanese': "Lebanese universities offer quality education in various fields. Consider factors like accreditation, faculty, facilities, and career support when choosing.",
-            'university': "When selecting a university, consider program quality, location, cost, career services, and alumni network. Research thoroughly before deciding."
-        }
+        # Smart keyword responses
+        if any(word in question_lower for word in ['law', 'legal', 'attorney']):
+            return {
+                "answer": "📚 **Law Specializations**:\n• Criminal Law (prosecution/defense)\n• Corporate Law (business legal matters)  \n• Family Law (divorce, custody)\n• Intellectual Property (patents, copyrights)\n• International Law (cross-border issues)\n• Environmental Law (regulations, sustainability)\n\nEach specialization offers different career paths and requires specific skills.",
+                "confidence": "High"
+            }
         
-        for keyword, response in fallbacks.items():
-            if keyword in question_lower:
-                return {
-                    "answer": response,
-                    "confidence": "High",
-                    "source": "Career Knowledge Base"
-                }
+        elif any(word in question_lower for word in ['computer', 'programming', 'software', 'ai']):
+            return {
+                "answer": "💻 **Computer Science Careers**:\n• Software Development (web, mobile, desktop)\n• Data Science & AI (machine learning, analytics)\n• Cybersecurity (network protection, ethical hacking)\n• Cloud Computing (AWS, Azure, Google Cloud)\n• Game Development (design, programming)\n\nKey skills: Programming, algorithms, problem-solving, teamwork.",
+                "confidence": "High"
+            }
         
-        return {
-            "answer": "🎓 Career Compass is here to help! I provide expert guidance on careers, education, majors, and skills. What specific career questions can I assist with?",
-            "confidence": "High",
-            "source": "Career Assistant"
-        }
+        elif any(word in question_lower for word in ['business', 'management', 'marketing', 'finance']):
+            return {
+                "answer": "💼 **Business Specializations**:\n• Management (leadership, operations)\n• Marketing (digital, brand management)\n• Finance (banking, investment, analysis)\n• Entrepreneurship (startups, innovation)\n• Human Resources (talent management)\n\nThese lead to diverse careers across all industries.",
+                "confidence": "High"
+            }
+        
+        elif any(word in question_lower for word in ['engineering', 'civil', 'mechanical', 'electrical']):
+            return {
+                "answer": "⚙️ **Engineering Fields**:\n• Civil Engineering (infrastructure, construction)\n• Mechanical Engineering (machines, systems)\n• Electrical Engineering (electronics, power)\n• Computer Engineering (hardware, software)\n• Chemical Engineering (processes, materials)\n\nEach requires strong math and problem-solving skills.",
+                "confidence": "High"
+            }
+        
+        elif any(word in question_lower for word in ['skill', 'learn', 'develop']):
+            return {
+                "answer": "🎯 **Essential Career Skills**:\n\n**Technical Skills**:\n• Programming (Python, Java, JavaScript)\n• Data Analysis (Excel, SQL, Statistics)\n• Digital Marketing (SEO, Social Media)\n• Project Management\n\n**Soft Skills**:\n• Communication & Presentation\n• Problem-solving & Critical Thinking\n• Teamwork & Collaboration\n• Adaptability & Learning\n\nContinuous skill development is key for career growth!",
+                "confidence": "High"
+            }
+        
+        elif any(word in question_lower for word in ['major', 'study', 'degree', 'university']):
+            return {
+                "answer": "🎓 **Popular University Majors**:\n\n**High Demand Fields**:\n• Computer Science & AI\n• Business Administration\n• Engineering (Various types)\n• Healthcare & Medicine\n• Data Science\n• Environmental Science\n\n**Choosing Tips**:\n• Consider your interests and strengths\n• Research job market demand\n• Look at career growth opportunities\n• Consider required education duration\n• Talk to professionals in the field",
+                "confidence": "High"
+            }
+        
+        else:
+            return {
+                "answer": "🎓 **Welcome to Career Compass!** 🤖\n\nI can help you with:\n• Career path recommendations\n• University major selection\n• Skill development guidance\n• Educational requirements\n• Job market insights\n• Professional development\n\n**Try asking about**:\n• 'What are the best careers in tech?'\n• 'Which engineering field should I choose?'\n• 'What skills are important for business?'\n• 'Tell me about law specializations'\n\nWhat career questions can I help with today?",
+                "confidence": "High"
+            }
 
-# Create and initialize system
-career_system = CareerCompassRAG()
+# Create instance
+career_system = CareerCompassChat()
