@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 import re
 import requests
 import json
-import time
 
 load_dotenv()
 
@@ -19,36 +18,11 @@ class CareerCompassRAG:
         self.career_data = None
         self.is_initialized = False
         
+        logger.info(f"🔑 API Key available: {bool(self.api_key)}")
         if self.api_key:
-            logger.info("✅ OpenAI API key loaded successfully")
-            # Test the API key immediately
-            self._test_openai_connection()
-        else:
-            logger.error("❌ OPENAI_API_KEY not found in environment")
+            logger.info(f"🔑 API Key starts with: {self.api_key[:20]}...")
         
         logger.info("✅ Career RAG class created")
-
-    def _test_openai_connection(self):
-        """Test OpenAI connection on startup"""
-        try:
-            test_prompt = "Hello, respond with 'OK' if you can hear me."
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-            data = {
-                "model": "gpt-3.5-turbo",
-                "messages": [{"role": "user", "content": test_prompt}],
-                "max_tokens": 5
-            }
-            
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
-            if response.status_code == 200:
-                logger.info("✅ OpenAI API connection test: SUCCESS")
-            else:
-                logger.error(f"❌ OpenAI API test failed: {response.status_code} - {response.text}")
-        except Exception as e:
-            logger.error(f"❌ OpenAI API test error: {e}")
 
     def _load_career_data(self, data_path):
         """Load career dataset"""
@@ -74,7 +48,7 @@ class CareerCompassRAG:
             return True
         return False
 
-    def _find_relevant_qa(self, question, top_k=3):
+    def _find_relevant_qa(self, question, top_k=5):
         """Find relevant Q&A using keyword matching"""
         if self.career_data is None:
             return []
@@ -105,6 +79,7 @@ class CareerCompassRAG:
     def _call_openai_direct(self, prompt):
         """Make direct HTTP request to OpenAI API"""
         if not self.api_key:
+            logger.error("❌ No API key available")
             raise ValueError("OpenAI API key not available")
         
         headers = {
@@ -113,7 +88,7 @@ class CareerCompassRAG:
         }
         
         data = {
-            "model": "gpt-3.5-turbo",  # Using faster model
+            "model": "gpt-4o-mini",
             "messages": [
                 {
                     "role": "user",
@@ -121,32 +96,21 @@ class CareerCompassRAG:
                 }
             ],
             "temperature": 0.3,
-            "max_tokens": 400
+            "max_tokens": 500
         }
         
         try:
             logger.info("🔄 Making OpenAI API request...")
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=20)
+            response = requests.post(self.api_url, headers=headers, json=data, timeout=30)
             logger.info(f"📡 Response status: {response.status_code}")
             
-            if response.status_code == 401:
-                logger.error("❌ OpenAI API: Invalid API Key")
-                raise ValueError("Invalid OpenAI API Key")
-            elif response.status_code == 429:
-                logger.error("❌ OpenAI API: Rate Limit Exceeded")
-                raise ValueError("OpenAI Rate Limit Exceeded")
-            elif response.status_code != 200:
-                logger.error(f"❌ OpenAI API Error {response.status_code}: {response.text}")
+            if response.status_code != 200:
+                logger.error(f"❌ API Error {response.status_code}: {response.text}")
                 response.raise_for_status()
             
             result = response.json()
-            answer = result["choices"][0]["message"]["content"].strip()
-            logger.info("✅ OpenAI response received successfully")
-            return answer
+            return result["choices"][0]["message"]["content"].strip()
             
-        except requests.exceptions.Timeout:
-            logger.error("❌ OpenAI API timeout")
-            raise
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ OpenAI API request failed: {e}")
             raise
@@ -177,56 +141,84 @@ class CareerCompassRAG:
             # Build context from your dataset
             context = "RELEVANT CAREER GUIDANCE INFORMATION:\n\n"
             for i, (q, a) in enumerate(relevant_data, 1):
+                # Clean the answers before sending to OpenAI
                 clean_a = self._clean_text_for_prompt(a)
                 context += f"{i}. Q: {q}\n   A: {clean_a}\n\n"
 
             logger.info(f"🔍 Found {len(relevant_data)} relevant entries")
 
             # Create optimized RAG prompt
-            prompt = f"""You are Career Compass, an expert career guidance advisor. Use the specific career information from our database below to provide a detailed, actionable answer.
+            prompt = f"""You are Career Compass, an expert career guidance advisor. Use the following career information from our database to provide a helpful, professional answer.
 
-CONTEXT FROM CAREER DATABASE:
 {context}
 
 USER QUESTION: {question}
 
-IMPORTANT: Provide a clear, professional answer based on the context above. Structure your response with proper paragraphs and focus on being helpful.
+IMPORTANT INSTRUCTIONS:
+- Provide specific, actionable career guidance based on the context above
+- Focus on being helpful and professional
+- Keep your answer concise (2-3 paragraphs maximum)
+- If the context doesn't fully address the question, provide general career advice
+- Use a warm, supportive tone
+- Structure your answer with clear paragraphs
 
 ANSWER:"""
 
-            # Use direct OpenAI API call - FORCE it to work
-            if not self.api_key:
-                logger.error("❌ No API key available")
-                raise ValueError("OpenAI API key not configured")
-            
-            logger.info("🚀 Calling OpenAI API...")
-            answer = self._call_openai_direct(prompt)
-            
-            return {
-                "answer": answer,
-                "relevant_matches": len(relevant_data),
-                "confidence": "High"
-            }
+            # Use direct OpenAI API call
+            if self.api_key:
+                logger.info("🚀 Attempting to call OpenAI API...")
+                answer = self._call_openai_direct(prompt)
+                logger.info("✅ Successfully generated answer with OpenAI")
+                return {
+                    "answer": answer,
+                    "relevant_matches": len(relevant_data),
+                    "confidence": "High"
+                }
+            else:
+                logger.error("❌ No API key available for OpenAI")
+                raise ValueError("OpenAI API key not available")
             
         except Exception as e:
             logger.error(f"❌ RAG error: {e}")
-            # Instead of falling back to dataset, return a clear error message
-            return {
-                "answer": "I'm currently experiencing technical difficulties. Please try again in a moment or contact support if the issue persists.",
-                "confidence": "Low"
-            }
+            logger.info("🔄 Falling back to dataset mode")
+            # Enhanced fallback
+            return self._get_enhanced_fallback(question, relevant_data)
 
     def _clean_text_for_prompt(self, text):
-        """Clean text before sending to OpenAI"""
+        """Clean text before sending to OpenAI to improve response quality"""
         if not text or pd.isna(text):
             return ""
         
-        # Remove URLs and clean text
+        # Remove URLs
         text = re.sub(r'http\S+', '', text)
+        # Remove excessive whitespace
         text = re.sub(r'\s+', ' ', text)
+        # Remove special formatting markers
         text = re.sub(r'\[.*?\]', '', text)
-        text = re.sub(r'Continue Reading', '', text)
+        text = re.sub(r'\(.*?\)', '', text)
         
-        # Take first 120 words
-        words = text.split()[:120]
+        # Take first 150 words to avoid overly long context
+        words = text.split()[:150]
         return ' '.join(words)
+
+    def _get_enhanced_fallback(self, question, relevant_data=None):
+        """Enhanced fallback when OpenAI fails"""
+        if relevant_data is None:
+            relevant_data = self._find_relevant_qa(question, top_k=2)
+        
+        if relevant_data:
+            # Use the best matching answer with cleaning
+            best_q, best_a = relevant_data[0]
+            clean_answer = self._clean_text_for_prompt(best_a)
+            
+            if len(clean_answer) > 50:
+                return {
+                    "answer": f"🎯 Based on career guidance information:\n\n{clean_answer}",
+                    "confidence": "Medium"
+                }
+        
+        # Default professional response
+        return {
+            "answer": "👋 I'm Career Compass! I specialize in helping students and professionals with career guidance, education paths, and skill development.\n\nPlease ask me about:\n• Career options and paths\n• College majors and degrees  \n• Skills development\n• Work preferences\n\nWhat career question can I help you with today?",
+            "confidence": "Medium"
+        }
