@@ -1,39 +1,39 @@
-import logging
 import re
+import logging
 import os
+import sys
+
 logger = logging.getLogger(__name__)
 
-# Try to import ML dependencies, but handle gracefully if missing
+# Try to import required ML dependencies
 try:
     import joblib
     import numpy as np
-    from fuzzywuzzy import process, fuzz
     from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder, LabelEncoder
     ML_DEPENDENCIES_AVAILABLE = True
-    logger.info("✅ All ML dependencies loaded successfully")
+    logger.info("✅ All ML dependencies available")
 except ImportError as e:
     ML_DEPENDENCIES_AVAILABLE = False
-    logger.warning(f"⚠️ Some ML dependencies missing: {e}")
-    logger.info("🔄 Using rule-based system only")
+    logger.error(f"❌ ML dependencies missing: {e}")
 
-# Global variable to store models
+# Global variable to store your actual models
 models = None
 ml_models_loaded = False
 
 def load_ml_models():
-    """Load ML models with proper error handling"""
+    """Load your actual ML models from models/models/ folder"""
     global models, ml_models_loaded
     
     if not ML_DEPENDENCIES_AVAILABLE:
-        logger.warning("❌ ML dependencies not available - skipping model loading")
+        logger.error("❌ Cannot load models - ML dependencies not available")
         return None
         
     try:
-        # Define model paths
-        model_paths = {
+        # Your actual model file paths
+        model_files = {
             'model': 'models/models/major_recommendation_model.pkl',
-            'mlb_skills': 'models/models/mlb_skills.pkl', 
-            'mlb_courses': 'models/models/mlb_courses.pkl',
+            'mlb_skills': 'models/models/mlb_skills.pkl',
+            'mlb_courses': 'models/models/mlb_courses.pkl', 
             'ohe_work_style': 'models/models/ohe_work_style.pkl',
             'ohe_passion': 'models/models/ohe_passion.pkl',
             'le_major': 'models/models/le_major.pkl',
@@ -47,203 +47,206 @@ def load_ml_models():
         }
         
         models = {}
-        all_models_found = True
         
-        for model_name, model_path in model_paths.items():
+        # Load each model file
+        for model_name, model_path in model_files.items():
             try:
                 if os.path.exists(model_path):
                     models[model_name] = joblib.load(model_path)
                     logger.info(f"✅ Loaded {model_name}")
                 else:
-                    logger.warning(f"⚠️ Model file not found: {model_path}")
-                    all_models_found = False
-                    break
+                    logger.error(f"❌ Model file not found: {model_path}")
+                    return None
             except Exception as e:
                 logger.error(f"❌ Error loading {model_name}: {e}")
-                all_models_found = False
-                break
+                return None
         
-        if all_models_found:
-            ml_models_loaded = True
-            logger.info("🎉 All ML models loaded successfully!")
-            return models
-        else:
-            logger.warning("⚠️ Some ML models failed to load")
-            models = None
-            ml_models_loaded = False
-            return None
+        ml_models_loaded = True
+        logger.info("🎉 ALL REAL ML MODELS LOADED SUCCESSFULLY!")
+        logger.info(f"   - Model type: {type(models['model'])}")
+        logger.info(f"   - Skills: {len(models['all_skills'])} items")
+        logger.info(f"   - Courses: {len(models['all_courses'])} items")
+        logger.info(f"   - Majors: {list(models['le_major'].classes_)}")
+        return models
             
     except Exception as e:
-        logger.error(f"❌ Critical error in load_ml_models: {e}")
-        models = None
-        ml_models_loaded = False
+        logger.error(f"❌ Critical error loading ML models: {e}")
         return None
 
-# Only try to load ML models if dependencies are available
+# Try to load the real ML models on startup
 if ML_DEPENDENCIES_AVAILABLE:
-    logger.info("🚀 Attempting to load ML models...")
-    load_ml_models()
-else:
-    logger.info("🔄 ML dependencies missing - using rule-based system")
+    logger.info("🚀 LOADING YOUR REAL ML MODELS FROM models/models/...")
+    models = load_ml_models()
 
-def process_user_text_input(user_input, master_list, threshold=70):
-    """Enhanced text processing with fuzzy matching"""
-    if not user_input or not isinstance(user_input, str):
+def simple_text_match(user_input, master_list):
+    """Simple text matching for skills/courses/passion"""
+    if not user_input or not isinstance(user_input, str) or not master_list:
         return []
     
     detected_items = set()
-    tokens = re.split(r'[,\n;]+', user_input.lower())
+    user_input_lower = user_input.lower()
     
-    for token in tokens:
-        token = token.strip()
-        if not token or len(token) < 2:
+    for item in master_list:
+        if not isinstance(item, str):
             continue
+            
+        item_lower = item.lower()
         
-        # Exact match
-        exact_matches = [item for item in master_list if token == item.lower()]
-        if exact_matches:
-            detected_items.update(exact_matches)
-            continue
-        
-        # Partial match
-        partial_matches = [item for item in master_list if token in item.lower() or item.lower() in token]
-        if partial_matches:
-            detected_items.update(partial_matches)
-            continue
-        
-        # Fuzzy matching (if available)
-        if ML_DEPENDENCIES_AVAILABLE:
-            matches = process.extract(token, master_list, scorer=fuzz.WRatio, limit=3)
-            for match, score in matches:
-                if score >= threshold:
-                    detected_items.add(match)
+        # Exact match or partial match
+        if item_lower in user_input_lower or user_input_lower in item_lower:
+            detected_items.add(item)
         else:
-            # Simple matching without fuzzywuzzy
-            for item in master_list:
-                if token in item.lower() or item.lower() in token:
-                    detected_items.add(item)
-                    break
+            # Word-based matching
+            input_words = set(re.findall(r'\w+', user_input_lower))
+            item_words = set(re.findall(r'\w+', item_lower))
+            common_words = input_words.intersection(item_words)
+            if len(common_words) >= 1:  # At least one common word
+                detected_items.add(item)
     
-    return list(detected_items)
+    return list(detected_items)[:3]  # Limit to 3 best matches
 
-def predict_major_rules(user_data):
-    """Rule-based fallback prediction"""
+def predict_with_real_ml(user_data):
+    """Use your actual trained ML model for prediction"""
+    if not ml_models_loaded or not models:
+        return None, "Real ML models not loaded"
+    
     try:
-        riasec = user_data.get('riasec', {})
-        skills = user_data.get('skills_text', '').lower()
-        courses = user_data.get('courses_text', '').lower()
-        passion = user_data.get('passion_text', '').lower()
+        logger.info("🧠 USING YOUR REAL ML MODEL FOR PREDICTION")
+        
+        # Process RIASEC scores
+        riasec_order = ['R', 'I', 'A', 'S', 'E', 'C']
+        X_riasec = np.array([[user_data['riasec'].get(col, 0) for col in riasec_order]])
+        logger.info(f"📊 RIASEC features: {X_riasec}")
+        
+        # Process skills using your actual MLB
+        skills_text = user_data.get('skills_text', '')
+        detected_skills = simple_text_match(skills_text, models['all_skills'])
+        logger.info(f"🔧 Detected skills: {detected_skills}")
+        X_skills = models['mlb_skills'].transform([detected_skills])
+        
+        # Process courses using your actual MLB
+        courses_text = user_data.get('courses_text', '')
+        detected_courses = simple_text_match(courses_text, models['all_courses'])
+        logger.info(f"📚 Detected courses: {detected_courses}")
+        X_courses = models['mlb_courses'].transform([detected_courses])
+        
+        # Process work style using your actual OHE
         work_style = user_data.get('work_style', '')
+        if work_style not in models['all_work_styles']:
+            work_style = models['all_work_styles'][0] if models['all_work_styles'] else 'Team-Oriented'
+        X_work_style = models['ohe_work_style'].transform([[work_style]])
+        logger.info(f"💼 Work style: {work_style}")
         
-        # Smart recommendation logic
-        if riasec.get('I', 0) or any(word in skills for word in ['programming', 'python', 'java', 'code', 'software']):
-            major = "Computer Science"
-            faculty = "Faculty of Engineering"
-        elif riasec.get('E', 0) or any(word in skills for word in ['business', 'management', 'leadership', 'marketing']):
-            major = "Business Administration" 
-            faculty = "Faculty of Business"
-        elif riasec.get('A', 0) or any(word in skills for word in ['design', 'art', 'creative', 'drawing']):
-            major = "Architecture"
-            faculty = "Faculty of Fine Arts"
-        elif riasec.get('S', 0) or any(word in skills for word in ['teaching', 'helping', 'care', 'people']):
-            major = "Psychology"
-            faculty = "Faculty of Arts and Sciences"
-        else:
-            major = "General Studies"
-            faculty = "Faculty of Arts and Sciences"
+        # Process passion using your actual OHE
+        passion_text = user_data.get('passion_text', '')
+        detected_passions = simple_text_match(passion_text, models['all_passions'])
+        passion = detected_passions[0] if detected_passions else (models['all_passions'][0] if models['all_passions'] else 'Technology')
+        X_passion = models['ohe_passion'].transform([[passion]])
+        logger.info(f"❤️ Passion: {passion}")
         
-        # Detect skills
-        detected_skills = []
-        if any(word in skills for word in ['python', 'java', 'c++', 'programming']):
-            detected_skills.append("Programming")
-        if any(word in skills for word in ['design', 'creative', 'art']):
-            detected_skills.append("Design")
-        if any(word in skills for word in ['management', 'leadership']):
-            detected_skills.append("Management")
-        if any(word in skills for word in ['analysis', 'research', 'data']):
-            detected_skills.append("Analytical Skills")
-            
-        if not detected_skills:
-            detected_skills = ["Critical Thinking", "Problem Solving"]
+        # Combine all features
+        X_user = np.hstack([X_riasec, X_skills, X_courses, X_work_style, X_passion])
+        logger.info(f"📈 Combined features shape: {X_user.shape}")
         
-        # Detect courses
-        detected_courses = []
-        if any(word in courses for word in ['computer', 'programming', 'coding']):
-            detected_courses.append("Computer Science")
-        if any(word in courses for word in ['business', 'economics']):
-            detected_courses.append("Business")
-        if any(word in courses for word in ['math', 'calculus', 'algebra']):
-            detected_courses.append("Mathematics")
-            
-        if not detected_courses:
-            detected_courses = ["General Education"]
+        # Make prediction using your actual trained model
+        prediction = models['model'].predict(X_user)
+        logger.info(f"🎯 Raw prediction: {prediction}")
         
-        # Detect passion
-        if any(word in passion for word in ['tech', 'computer', 'software', 'ai']):
-            detected_passion = "Technology"
-        elif any(word in passion for word in ['business', 'entrepreneur', 'startup']):
-            detected_passion = "Business"
-        elif any(word in passion for word in ['art', 'design', 'creative']):
-            detected_passion = "Arts and Design"
-        elif any(word in passion for word in ['help', 'people', 'community']):
-            detected_passion = "Helping Others"
-        else:
-            detected_passion = "Learning and Development"
+        # Decode predictions using your actual label encoders
+        major = models['le_major'].inverse_transform([prediction[0][0]])[0]
+        faculty = models['le_faculty'].inverse_transform([prediction[0][1]])[0]
+        degree = models['le_degree'].inverse_transform([prediction[0][2]])[0]
+        campus = models['le_campus'].inverse_transform([prediction[0][3]])[0]
         
         result = {
             'major': major,
             'faculty': faculty,
-            'degree': "Bachelor of Science" if "Engineering" in faculty else "Bachelor of Arts",
-            'campus': "Main Campus",
+            'degree': degree,
+            'campus': campus,
             'detected_info': {
                 'detected_skills': detected_skills,
                 'detected_courses': detected_courses,
-                'detected_passion': detected_passion
+                'detected_passion': passion
             },
-            'confidence': "Medium",
-            'method': 'Rule-Based'
+            'confidence': 'High',
+            'method': 'Real ML Model'
         }
         
-        logger.info(f"📊 Rule-based Prediction: {result['major']}")
+        logger.info(f"✅ REAL ML PREDICTION: {major} in {faculty}")
         return result, None
         
     except Exception as e:
-        logger.error(f"❌ Rule-based prediction failed: {e}")
-        return None, f"Rule-based prediction error: {str(e)}"
+        logger.error(f"❌ Real ML prediction failed: {e}")
+        return None, f"ML prediction error: {str(e)}"
+
+def predict_major_rules(user_data):
+    """Rule-based fallback (only if ML fails)"""
+    try:
+        riasec = user_data.get('riasec', {})
+        skills = user_data.get('skills_text', '').lower()
+        passion = user_data.get('passion_text', '').lower()
+        
+        # Simple rule-based logic as fallback
+        if riasec.get('I', 0) or any(word in skills for word in ['programming', 'python', 'java']):
+            major = "Computer Science"
+            faculty = "Faculty of Engineering"
+        elif riasec.get('E', 0) or any(word in skills for word in ['business', 'management']):
+            major = "Business Administration"
+            faculty = "Faculty of Business"
+        elif riasec.get('A', 0) or any(word in skills for word in ['design', 'art']):
+            major = "Architecture" 
+            faculty = "Faculty of Fine Arts"
+        else:
+            major = "General Studies"
+            faculty = "Faculty of Arts and Sciences"
+        
+        return {
+            'major': major,
+            'faculty': faculty,
+            'degree': "Bachelor of Science",
+            'campus': "Main Campus",
+            'detected_info': {
+                'detected_skills': ["Based on your input"],
+                'detected_courses': ["General"],
+                'detected_passion': "Various"
+            },
+            'confidence': 'Medium',
+            'method': 'Rule-Based Fallback'
+        }, None
+        
+    except Exception as e:
+        return None, f"Rule-based error: {str(e)}"
 
 def predict_major(user_data):
     """
-    Hybrid prediction - tries ML first, falls back to rules
+    Main prediction function - uses REAL ML model if available
     """
-    logger.info("🤖 Starting major prediction...")
+    logger.info("🤖 STARTING MAJOR PREDICTION")
+    logger.info(f"📝 User data: {user_data}")
     
-    # If ML dependencies are not available, use rule-based directly
-    if not ML_DEPENDENCIES_AVAILABLE:
-        logger.info("🔄 ML dependencies missing - using rule-based system")
-        rule_result, rule_error = predict_major_rules(user_data)
-        if rule_result:
-            rule_result['success'] = True
-            return rule_result
-    
-    # Try ML prediction first (if dependencies available)
+    # Try REAL ML model first
     if ml_models_loaded:
-        # ML prediction code would go here
-        # For now, fall back to rules
-        pass
+        ml_result, ml_error = predict_with_real_ml(user_data)
+        if ml_result:
+            ml_result['success'] = True
+            logger.info("🎯 USING REAL ML MODEL PREDICTION")
+            return ml_result
+        else:
+            logger.warning(f"🔄 Real ML failed: {ml_error}")
     
-    # Fall back to rule-based system
+    # Fall back to rule-based
     rule_result, rule_error = predict_major_rules(user_data)
     if rule_result:
         rule_result['success'] = True
-        logger.info("🔄 Using rule-based prediction")
+        logger.info("🔄 Using rule-based fallback")
         return rule_result
     
     # Ultimate fallback
-    logger.error("❌ Both ML and rule-based predictions failed")
+    logger.error("❌ All prediction methods failed")
     return {
         'major': "Computer Science",
-        'faculty': "Faculty of Engineering", 
-        'degree': "Bachelor of Science",
+        'faculty': "Faculty of Science",
+        'degree': "Bachelor of Science", 
         'campus': "Main Campus",
         'detected_info': {
             'detected_skills': ["Analytical Thinking"],
@@ -255,10 +258,8 @@ def predict_major(user_data):
         'method': 'Emergency Fallback'
     }
 
-# Log system status
-if ML_DEPENDENCIES_AVAILABLE and ml_models_loaded:
-    logger.info("🎉 ML system ready - Real model loaded")
-elif ML_DEPENDENCIES_AVAILABLE:
-    logger.info("🔄 ML dependencies available but models not loaded")
+# Log final status
+if ml_models_loaded:
+    logger.info("🎉 SYSTEM READY - USING YOUR REAL ML MODELS!")
 else:
-    logger.info("🔄 Using rule-based system - ML dependencies missing")
+    logger.info("🔄 SYSTEM READY - Using rule-based system (ML dependencies missing)")
