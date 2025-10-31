@@ -12,8 +12,13 @@ logger = logging.getLogger(__name__)
 
 class CareerCompassRAG:
     def __init__(self):
-        # Initialize OpenAI client with API key
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        # Initialize OpenAI client with API key - SIMPLE version
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("❌ OPENAI_API_KEY not found in environment variables")
+            raise ValueError("OpenAI API key is required")
+        
+        self.client = OpenAI(api_key=api_key)
         self.career_data = None
         self.is_initialized = False
         logger.info("✅ Career RAG class created")
@@ -108,6 +113,7 @@ class CareerCompassRAG:
 
             Provide accurate, specific career guidance based on the context.
             Keep your answer focused, helpful, and professional.
+            Answer in 2-3 paragraphs maximum.
             """
 
             # Use OpenAI with CORRECT modern API
@@ -140,17 +146,17 @@ class CareerCompassRAG:
             seen_answers = set()
             
             for q, a in relevant_data:
-                # Clean the answer text
-                clean_a = a.strip()
+                # Clean the answer text - take first 200 chars
+                clean_a = a.strip()[:200] + "..." if len(a) > 200 else a.strip()
                 if clean_a and clean_a not in seen_answers:
                     seen_answers.add(clean_a)
                     unique_answers.append(clean_a)
             
             if unique_answers:
-                answer = "Based on career database:\n\n" + "\n\n".join(unique_answers[:2])
+                answer = "Based on career guidance information:\n\n" + "\n\n".join(unique_answers[:2])
                 return {"answer": answer, "confidence": "Medium"}
         
         return {
-            "answer": "I'm here to help with career guidance! Please ask about careers, education, majors, or skills.",
+            "answer": "I'm here to help with career guidance! Please ask about careers, education, majors, or skills development.",
             "confidence": "Medium"
         }
