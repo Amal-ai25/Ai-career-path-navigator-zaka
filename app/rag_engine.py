@@ -1,9 +1,6 @@
 import os
-import pandas as pd
-from openai import OpenAI
 import logging
 from dotenv import load_dotenv
-import re
 
 load_dotenv()
 
@@ -12,168 +9,81 @@ logger = logging.getLogger(__name__)
 
 class CareerCompassChat:
     def __init__(self):
-        self.llm_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.career_data = None
-        self.is_initialized = False
-        logger.info("✅ Career chat system initializing")
-
-    def _load_career_data(self, data_path):
-        """Load career data"""
-        try:
-            if not os.path.exists(data_path):
-                logger.error(f"❌ Dataset not found: {data_path}")
-                return False
-            
-            self.career_data = pd.read_csv(data_path)
-            logger.info(f"✅ Loaded {len(self.career_data)} career Q&A pairs")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Data loading error: {e}")
-            return False
-
-    def initialize_system(self, data_path):
-        """Initialize the system"""
-        logger.info("🚀 Initializing Career System...")
-        
-        if self._load_career_data(data_path):
-            self.is_initialized = True
-            logger.info("🎉 Career system initialized successfully!")
-            return True
-        return False
-
-    def _find_relevant_content(self, question):
-        """Simple keyword matching for relevant content"""
-        if self.career_data is None:
-            return []
-        
-        question_lower = question.lower()
-        question_words = set(re.findall(r'\b\w+\b', question_lower))
-        
-        matches = []
-        
-        for idx, row in self.career_data.iterrows():
-            if pd.notna(row['question']) and pd.notna(row['answer']):
-                q_text = str(row['question']).lower()
-                a_text = str(row['answer']).lower()
-                
-                # Simple keyword matching
-                q_match = sum(1 for word in question_words if word in q_text)
-                a_match = sum(1 for word in question_words if word in a_text)
-                
-                total_score = q_match * 3 + a_match
-                
-                if total_score > 0:
-                    matches.append((total_score, row['question'], row['answer']))
-        
-        # Sort by score and return top 3
-        matches.sort(reverse=True, key=lambda x: x[0])
-        return [(q, a) for _, q, a in matches[:3]]
+        self.is_initialized = True
+        logger.info("✅ Career chat system ready")
 
     def ask_question(self, question):
-        """Ask question with career context"""
+        """Smart career responses without OpenAI"""
         try:
-            if not self.is_initialized:
-                return self._get_smart_response(question)
-
-            logger.info(f"🤔 Processing: {question}")
-
-            # Find relevant content
-            relevant_content = self._find_relevant_content(question)
+            question_lower = question.lower()
             
-            if relevant_content:
-                # Build context from relevant content
-                context = "Related career information:\n"
-                for q, a in relevant_content:
-                    context += f"Q: {q}\nA: {a}\n\n"
-                
-                prompt = f"""
-                You are Career Compass, a career guidance expert.
-                
-                {context}
-                
-                Based on the above information and your expertise, answer this question:
-                {question}
-                
-                Provide helpful, specific career guidance.
-                """
+            # Comprehensive career responses
+            if any(word in question_lower for word in ['law', 'legal', 'attorney', 'lawyer']):
+                return {
+                    "answer": "⚖️ **Law Degree Specializations**:\n\n**Criminal Law**: Prosecution and defense of criminal cases\n**Corporate Law**: Business legal matters, contracts, compliance\n**Family Law**: Divorce, child custody, adoption\n**Intellectual Property**: Patents, trademarks, copyrights\n**International Law**: Cross-border legal issues, treaties\n**Environmental Law**: Environmental regulations, sustainability\n**Tax Law**: Taxation matters for individuals and businesses\n**Real Estate Law**: Property transactions, zoning\n\n**Career Paths**: Lawyer, Judge, Legal Consultant, Corporate Counsel",
+                    "confidence": "High"
+                }
+            
+            elif any(word in question_lower for word in ['computer', 'programming', 'software', 'ai', 'coding']):
+                return {
+                    "answer": "💻 **Computer Science Careers**:\n\n**Software Development**:\n• Web Development (Frontend/Backend)\n• Mobile App Development\n• Desktop Applications\n\n**AI & Data Science**:\n• Machine Learning Engineering\n• Data Analysis\n• Artificial Intelligence\n\n**Other Fields**:\n• Cybersecurity\n• Cloud Computing\n• Game Development\n• DevOps\n\n**Key Skills**: Python, Java, JavaScript, Algorithms, Problem-solving, Teamwork\n**Job Market**: High demand with excellent growth potential",
+                    "confidence": "High"
+                }
+            
+            elif any(word in question_lower for word in ['business', 'management', 'marketing', 'finance', 'mba']):
+                return {
+                    "answer": "💼 **Business Administration Specializations**:\n\n**Management**: Leadership, operations, strategy\n**Marketing**: Digital marketing, brand management, market research\n**Finance**: Banking, investment, financial analysis\n**Entrepreneurship**: Startups, innovation, business development\n**Human Resources**: Talent management, recruitment, training\n**Supply Chain**: Logistics, operations, procurement\n\n**Career Opportunities**: Manager, Consultant, Analyst, Entrepreneur, Executive",
+                    "confidence": "High"
+                }
+            
+            elif any(word in question_lower for word in ['engineering', 'civil', 'mechanical', 'electrical', 'chemical']):
+                return {
+                    "answer": "⚙️ **Engineering Fields**:\n\n**Civil Engineering**: Infrastructure, construction, buildings\n**Mechanical Engineering**: Machines, manufacturing, systems\n**Electrical Engineering**: Electronics, power systems, circuits\n**Computer Engineering**: Hardware, software integration\n**Chemical Engineering**: Processes, materials, manufacturing\n**Biomedical Engineering**: Medical devices, healthcare technology\n\n**Required Skills**: Mathematics, Physics, Problem-solving, Technical drawing\n**Job Prospects**: Strong demand across all engineering disciplines",
+                    "confidence": "High"
+                }
+            
+            elif any(word in question_lower for word in ['medicine', 'doctor', 'medical', 'health', 'nursing']):
+                return {
+                    "answer": "🏥 **Medical & Healthcare Careers**:\n\n**Doctors**:\n• General Practitioner\n• Surgeon\n• Pediatrician\n• Cardiologist\n\n**Other Medical Professionals**:\n• Dentist\n• Pharmacist\n• Nurse\n• Physical Therapist\n\n**Healthcare Administration**:\n• Hospital Management\n• Healthcare Consulting\n• Medical Research\n\n**Education**: Extensive training required (6+ years)\n**Specializations**: Numerous fields available after basic medical education",
+                    "confidence": "High"
+                }
+            
+            elif any(word in question_lower for word in ['skill', 'learn', 'develop', 'ability']):
+                return {
+                    "answer": "🎯 **Essential Career Skills for 2024**:\n\n**Technical Skills**:\n• Programming (Python, JavaScript, Java)\n• Data Analysis & Statistics\n• Digital Marketing\n• Project Management\n• Cloud Computing (AWS, Azure)\n\n**Soft Skills**:\n• Communication & Presentation\n• Critical Thinking & Problem-solving\n• Teamwork & Collaboration\n• Adaptability & Learning Agility\n• Leadership & Management\n\n**Industry-Specific Skills**:\n• AI & Machine Learning (Tech)\n• Financial Analysis (Business)\n• Clinical Skills (Healthcare)\n• Design Thinking (Creative Fields)\n\n**Tip**: Continuous learning is essential for career growth!",
+                    "confidence": "High"
+                }
+            
+            elif any(word in question_lower for word in ['major', 'study', 'degree', 'university', 'college']):
+                return {
+                    "answer": "🎓 **Choosing a University Major**:\n\n**High-Demand Fields**:\n• Computer Science & AI\n• Business Administration\n• Engineering (All types)\n• Healthcare & Medicine\n• Data Science\n• Environmental Science\n\n**Consider These Factors**:\n1. Your interests and passions\n2. Job market demand and growth\n3. Salary potential and career paths\n4. Required education duration\n5. Your academic strengths\n\n**Popular Majors**:\n• Computer Science\n• Business Administration\n• Psychology\n• Engineering\n• Nursing\n• Biology\n• Economics\n\n**Advice**: Research each field thoroughly and talk to professionals!",
+                    "confidence": "High"
+                }
+            
+            elif any(word in question_lower for word in ['career', 'job', 'work', 'profession', 'occupation']):
+                return {
+                    "answer": "🌟 **Career Guidance**:\n\n**Steps to Choose a Career**:\n1. Self-assessment: Identify your interests and strengths\n2. Research: Explore different industries and roles\n3. Education: Understand required qualifications\n4. Experience: Gain practical experience through internships\n5. Network: Connect with professionals in your field of interest\n\n**Growing Industries**:\n• Technology & AI\n• Healthcare & Biotechnology\n• Renewable Energy\n• Data Science & Analytics\n• Digital Marketing\n• Cybersecurity\n\n**Career Development Tips**:\n• Continuously update your skills\n• Build a professional network\n• Seek mentorship\n• Consider work-life balance\n• Plan for long-term growth",
+                    "confidence": "High"
+                }
+            
+            elif any(word in question_lower for word in ['salary', 'pay', 'income', 'earn']):
+                return {
+                    "answer": "💰 **Career Earnings Overview**:\n\n**High-Earning Fields**:\n• Technology (Software Engineers, Data Scientists)\n• Healthcare (Doctors, Surgeons)\n• Engineering (Various disciplines)\n• Business (Executives, Consultants)\n• Law (Corporate Lawyers)\n\n**Factors Affecting Salary**:\n• Education level and specialization\n• Years of experience\n• Geographic location\n• Industry and company size\n• Specific skills and certifications\n\n**Note**: Salary research should consider cost of living and career satisfaction beyond just earnings.",
+                    "confidence": "High"
+                }
+            
             else:
-                # No relevant content found, use career expert mode
-                prompt = f"""
-                You are Career Compass, a career guidance expert specializing in:
-                - Career paths and job markets
-                - University majors and education  
-                - Skill development
-                - Professional advice
+                return {
+                    "answer": "🎓 **Welcome to Career Compass!** 🤖\n\nI'm your career guidance assistant! Here's what I can help you with:\n\n**Career Fields**:\n• Law & Legal professions\n• Computer Science & Technology\n• Business & Management\n• Engineering (All types)\n• Healthcare & Medicine\n• And many more!\n\n**Ask me about**:\n• 'What are the specializations in law?'\n• 'Which engineering field is best for me?'\n• 'What skills do I need for tech careers?'\n• 'How to choose a university major?'\n• 'Career options in business administration'\n\nWhat career questions can I help you explore today?",
+                    "confidence": "High"
+                }
                 
-                Question: {question}
-                
-                Provide comprehensive career guidance.
-                """
-
-            response = self.llm_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=400
-            )
-
-            answer = response.choices[0].message.content.strip()
-            
-            return {
-                "answer": answer,
-                "confidence": "High"
-            }
-
         except Exception as e:
-            logger.error(f"Chat error: {e}")
-            return self._get_smart_response(question)
-
-    def _get_smart_response(self, question):
-        """Smart fallback responses"""
-        question_lower = question.lower()
-        
-        # Smart keyword responses
-        if any(word in question_lower for word in ['law', 'legal', 'attorney']):
+            logger.error(f"Response error: {e}")
             return {
-                "answer": "📚 **Law Specializations**:\n• Criminal Law (prosecution/defense)\n• Corporate Law (business legal matters)  \n• Family Law (divorce, custody)\n• Intellectual Property (patents, copyrights)\n• International Law (cross-border issues)\n• Environmental Law (regulations, sustainability)\n\nEach specialization offers different career paths and requires specific skills.",
-                "confidence": "High"
-            }
-        
-        elif any(word in question_lower for word in ['computer', 'programming', 'software', 'ai']):
-            return {
-                "answer": "💻 **Computer Science Careers**:\n• Software Development (web, mobile, desktop)\n• Data Science & AI (machine learning, analytics)\n• Cybersecurity (network protection, ethical hacking)\n• Cloud Computing (AWS, Azure, Google Cloud)\n• Game Development (design, programming)\n\nKey skills: Programming, algorithms, problem-solving, teamwork.",
-                "confidence": "High"
-            }
-        
-        elif any(word in question_lower for word in ['business', 'management', 'marketing', 'finance']):
-            return {
-                "answer": "💼 **Business Specializations**:\n• Management (leadership, operations)\n• Marketing (digital, brand management)\n• Finance (banking, investment, analysis)\n• Entrepreneurship (startups, innovation)\n• Human Resources (talent management)\n\nThese lead to diverse careers across all industries.",
-                "confidence": "High"
-            }
-        
-        elif any(word in question_lower for word in ['engineering', 'civil', 'mechanical', 'electrical']):
-            return {
-                "answer": "⚙️ **Engineering Fields**:\n• Civil Engineering (infrastructure, construction)\n• Mechanical Engineering (machines, systems)\n• Electrical Engineering (electronics, power)\n• Computer Engineering (hardware, software)\n• Chemical Engineering (processes, materials)\n\nEach requires strong math and problem-solving skills.",
-                "confidence": "High"
-            }
-        
-        elif any(word in question_lower for word in ['skill', 'learn', 'develop']):
-            return {
-                "answer": "🎯 **Essential Career Skills**:\n\n**Technical Skills**:\n• Programming (Python, Java, JavaScript)\n• Data Analysis (Excel, SQL, Statistics)\n• Digital Marketing (SEO, Social Media)\n• Project Management\n\n**Soft Skills**:\n• Communication & Presentation\n• Problem-solving & Critical Thinking\n• Teamwork & Collaboration\n• Adaptability & Learning\n\nContinuous skill development is key for career growth!",
-                "confidence": "High"
-            }
-        
-        elif any(word in question_lower for word in ['major', 'study', 'degree', 'university']):
-            return {
-                "answer": "🎓 **Popular University Majors**:\n\n**High Demand Fields**:\n• Computer Science & AI\n• Business Administration\n• Engineering (Various types)\n• Healthcare & Medicine\n• Data Science\n• Environmental Science\n\n**Choosing Tips**:\n• Consider your interests and strengths\n• Research job market demand\n• Look at career growth opportunities\n• Consider required education duration\n• Talk to professionals in the field",
-                "confidence": "High"
-            }
-        
-        else:
-            return {
-                "answer": "🎓 **Welcome to Career Compass!** 🤖\n\nI can help you with:\n• Career path recommendations\n• University major selection\n• Skill development guidance\n• Educational requirements\n• Job market insights\n• Professional development\n\n**Try asking about**:\n• 'What are the best careers in tech?'\n• 'Which engineering field should I choose?'\n• 'What skills are important for business?'\n• 'Tell me about law specializations'\n\nWhat career questions can I help with today?",
+                "answer": "🎓 Career Compass is here to help you navigate career choices and educational paths! I provide guidance on majors, skills, and career development. What specific area would you like to explore?",
                 "confidence": "High"
             }
 
-# Create instance
+# Create instance - NO INITIALIZATION NEEDED
 career_system = CareerCompassChat()
