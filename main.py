@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import logging
+import os
 import uvicorn
 
 logging.basicConfig(level=logging.INFO)
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Import systems - these will NEVER fail now
+# Import systems
 try:
     from app.utils.ml_utils import predict_major
     logger.info("✅ ML system imported")
@@ -20,9 +21,9 @@ except Exception as e:
 
 try:
     from app.rag_engine import career_system
-    logger.info("✅ Chat system imported")
+    logger.info("✅ RAG system imported")
 except Exception as e:
-    logger.error(f"Chat import failed: {e}")
+    logger.error(f"RAG import failed: {e}")
     career_system = None
 
 # Static files
@@ -31,8 +32,22 @@ templates = Jinja2Templates(directory="app/templates")
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("🚀 Career Compass started successfully!")
-    logger.info("✅ All systems operational")
+    logger.info("🚀 Starting Career Compass...")
+    
+    # Initialize RAG system with dataset
+    if career_system:
+        try:
+            dataset_path = "app/final_merged_career_guidance.csv"
+            if os.path.exists(dataset_path):
+                success = career_system.initialize_system(dataset_path)
+                if success:
+                    logger.info("✅ RAG system initialized with career data!")
+                else:
+                    logger.error("❌ RAG initialization failed")
+            else:
+                logger.error(f"❌ Dataset not found: {dataset_path}")
+        except Exception as e:
+            logger.error(f"Startup error: {e}")
 
 @app.get("/")
 async def home(request: Request):
@@ -57,11 +72,11 @@ async def ask_question(data: dict):
             response = career_system.ask_question(question)
             return {"answer": response["answer"]}
         else:
-            return {"answer": "Welcome to Career Compass! 🎓 I can help you with career guidance, major selection, skill development, and educational advice. What would you like to know?"}
+            return {"answer": "Welcome to Career Compass! 🎓 I can help with career guidance, major selection, and skill development."}
             
     except Exception as e:
         logger.error(f"Ask error: {e}")
-        return {"answer": "I'm here to help with career guidance! Try asking about different majors, career paths, or skills development."}
+        return {"answer": "I'm here to help with career guidance! Try asking about different majors or career paths."}
 
 @app.post("/predict")
 async def predict(
@@ -100,32 +115,19 @@ async def predict(
             
     except Exception as e:
         logger.error(f"Predict error: {e}")
-        return JSONResponse({
-            "success": True,
-            "major": "General Studies",
-            "faculty": "Faculty of Arts and Sciences", 
-            "degree": "Bachelor of Arts",
-            "campus": "Main Campus",
-            "detected_info": {
-                "detected_skills": ["Critical Thinking", "Communication"],
-                "detected_courses": ["General Education"],
-                "detected_passion": "Learning"
-            },
-            "confidence": "Medium"
-        })
+        return JSONResponse({"success": False, "error": "Please try again."})
 
 @app.get("/health")
 async def health():
+    rag_ready = career_system is not None and career_system.is_initialized
+    
     return {
         "status": "healthy ✅",
         "service": "Career Compass",
-        "version": "1.0",
-        "message": "All systems operational - Direct OpenAI powered"
+        "rag_ready": rag_ready,
+        "ml_ready": predict_major is not None,
+        "message": "RAG system with career data" if rag_ready else "Basic chat system"
     }
-
-@app.get("/test")
-async def test():
-    return {"message": "Career Compass is working! 🚀"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8080)
