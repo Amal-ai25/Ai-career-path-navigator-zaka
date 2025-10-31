@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-import openai
+from openai import OpenAI
 import logging
 from dotenv import load_dotenv
 import re
@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 class CareerCompassRAG:
     def __init__(self):
-        # Set API key directly
-        openai.api_key = os.getenv("OPENAI_API_KEY")
+        # Initialize OpenAI client with API key
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.career_data = None
         self.is_initialized = False
         logger.info("✅ Career RAG class created")
@@ -107,10 +107,11 @@ class CareerCompassRAG:
             QUESTION: {question}
 
             Provide accurate, specific career guidance based on the context.
+            Keep your answer focused, helpful, and professional.
             """
 
-            # Use OpenAI
-            response = openai.ChatCompletion.create(
+            # Use OpenAI with CORRECT modern API
+            response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
@@ -134,12 +135,22 @@ class CareerCompassRAG:
         relevant_data = self._find_relevant_qa(question, top_k=3)
         
         if relevant_data:
-            answer = "Based on career database:\n\n"
+            # Clean up the answers - remove duplicates and truncate
+            unique_answers = []
+            seen_answers = set()
+            
             for q, a in relevant_data:
-                answer += f"• {a}\n"
-            return {"answer": answer, "confidence": "Medium"}
-        else:
-            return {
-                "answer": "I'm here to help with career guidance! Please ask about careers, education, majors, or skills.",
-                "confidence": "Medium"
-            }
+                # Clean the answer text
+                clean_a = a.strip()
+                if clean_a and clean_a not in seen_answers:
+                    seen_answers.add(clean_a)
+                    unique_answers.append(clean_a)
+            
+            if unique_answers:
+                answer = "Based on career database:\n\n" + "\n\n".join(unique_answers[:2])
+                return {"answer": answer, "confidence": "Medium"}
+        
+        return {
+            "answer": "I'm here to help with career guidance! Please ask about careers, education, majors, or skills.",
+            "confidence": "Medium"
+        }
