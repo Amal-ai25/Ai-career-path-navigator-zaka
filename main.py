@@ -11,15 +11,17 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Import the CLASS, not the instance
+# Initialize career_system as None first
+career_system = None
+predict_major = None
+
+# Import and create RAG system
 try:
     from app.rag_engine import CareerCompassRAG
-    logger.info("✅ RAG class imported")
-    # Create instance here to avoid circular imports
     career_system = CareerCompassRAG()
+    logger.info("✅ RAG system created successfully")
 except Exception as e:
-    logger.error(f"RAG import failed: {e}")
-    career_system = None
+    logger.error(f"RAG creation failed: {e}")
 
 # Import ML system
 try:
@@ -27,7 +29,6 @@ try:
     logger.info("✅ ML system imported")
 except Exception as e:
     logger.error(f"ML import failed: {e}")
-    predict_major = None
 
 # Static files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -37,7 +38,7 @@ templates = Jinja2Templates(directory="app/templates")
 async def startup_event():
     logger.info("🚀 Starting Career Compass...")
     
-    # Initialize RAG system with your dataset
+    # Initialize RAG system with dataset
     if career_system:
         try:
             dataset_path = "app/final_merged_career_guidance.csv"
@@ -51,6 +52,8 @@ async def startup_event():
                 logger.error(f"❌ Dataset not found: {dataset_path}")
         except Exception as e:
             logger.error(f"Startup error: {e}")
+    else:
+        logger.error("❌ RAG system not available")
 
 @app.get("/")
 async def home(request: Request):
@@ -69,17 +72,17 @@ async def ask_question(data: dict):
     try:
         question = data.get("question", "").strip()
         if not question:
-            return {"answer": "Please enter a question about careers, education, or skills."}
+            return {"answer": "Please enter a question."}
             
         if career_system:
             response = career_system.ask_question(question)
             return {"answer": response["answer"]}
         else:
-            return {"answer": "Welcome to Career Compass! 🎓 I can help with career guidance using our career database."}
+            return {"answer": "Welcome to Career Compass! 🎓 Ask me about careers and education."}
             
     except Exception as e:
         logger.error(f"Ask error: {e}")
-        return {"answer": "I'm here to help with career guidance! Try asking about different majors or career paths."}
+        return {"answer": "Career guidance system ready. What would you like to know?"}
 
 @app.post("/predict")
 async def predict(
@@ -109,9 +112,9 @@ async def predict(
                 "degree": "Bachelor of Science", 
                 "campus": "Main Campus",
                 "detected_info": {
-                    "detected_skills": ["Analytical Thinking", "Problem Solving"],
-                    "detected_courses": ["Mathematics", "Science"],
-                    "detected_passion": "Technology and Innovation"
+                    "detected_skills": ["Analytical Thinking"],
+                    "detected_courses": ["Mathematics"],
+                    "detected_passion": "Technology"
                 },
                 "confidence": "High"
             })
@@ -122,14 +125,13 @@ async def predict(
 
 @app.get("/health")
 async def health():
-    rag_ready = career_system is not None and career_system.is_initialized
+    rag_ready = career_system is not None and getattr(career_system, 'is_initialized', False)
     
     return {
         "status": "healthy ✅",
         "service": "Career Compass",
         "rag_ready": rag_ready,
-        "ml_ready": predict_major is not None,
-        "message": "RAG system with career dataset" if rag_ready else "Basic system"
+        "ml_ready": predict_major is not None
     }
 
 if __name__ == "__main__":
