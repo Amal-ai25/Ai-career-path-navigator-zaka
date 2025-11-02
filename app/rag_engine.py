@@ -1,224 +1,223 @@
 import os
 import pandas as pd
+import weaviate
+from weaviate.classes.init import Auth
+from weaviate.classes.config import Property, DataType
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_weaviate.vectorstores import WeaviateVectorStore
+from langchain.docstore.document import Document
+from langchain.text_splitter import TokenTextSplitter
+from openai import OpenAI
 import logging
 from dotenv import load_dotenv
-import re
-import requests
-import json
 
 load_dotenv()
 
+# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class CareerCompassRAG:
+class CareerCompassWeaviate:
     def __init__(self):
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.api_url = "https://api.openai.com/v1/chat/completions"
-        self.career_data = None
-        self.is_initialized = False
-        
-        logger.info(f"🔑 API Key available: {bool(self.api_key)}")
-        if self.api_key:
-            logger.info(f"🔑 API Key starts with: {self.api_key[:20]}...")
-        
-        logger.info("✅ Career RAG class created")
-
-    def _load_career_data(self, data_path):
-        """Load career dataset"""
+        self.client = None
+        self.vectorstore = None
+        self._llm_client = None
+    
+    def _get_llm_client(self):
+        """Lazy initialization of OpenAI client"""
+        if self._llm_client is None:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY environment variable is not set")
+            self._llm_client = OpenAI(api_key=api_key)
+        return self._llm_client
+    
+    # --- 1️⃣ Connect to Weaviate Cloud ---
+    def _initialize_weaviate_client(self):
+        """Initialize connection to Weaviate Cloud"""
         try:
-            if not os.path.exists(data_path):
-                logger.error(f"❌ Dataset not found: {data_path}")
-                return False
+            cluster_url = os.getenv("WEAVIATE_CLOUD_URL")
+            api_key = os.getenv("WEAVIATE_API_KEY")
+
+            logger.info(f"🔗 Connecting to Weaviate Cloud: {cluster_url}")
+            logger.info(f"📂 Current working directory: {os.getcwd()}")
             
-            self.career_data = pd.read_csv(data_path)
-            logger.info(f"✅ Loaded {len(self.career_data)} career Q&A pairs")
-            return True
+            self.client = weaviate.connect_to_weaviate_cloud(
+                cluster_url=cluster_url,
+                auth_credentials=Auth.api_key(api_key)
+            )
+
+            if self.client.is_ready():
+                logger.info("✅ Connected to Weaviate Cloud")
+                return True
+            else:
+                logger.error("❌ Weaviate not ready")
+                return False
         except Exception as e:
-            logger.error(f"❌ Data loading error: {e}")
+            logger.error(f"❌ Connection error: {e}")
             return False
 
-    def initialize_system(self, data_path):
-        """Initialize RAG system"""
-        logger.info("🚀 Initializing Career RAG...")
-        
-        if self._load_career_data(data_path):
-            self.is_initialized = True
-            logger.info("🎉 Career RAG initialized successfully!")
-            return True
-        return False
-
-    def _find_relevant_qa(self, question, top_k=5):
-        """Find relevant Q&A using keyword matching"""
-        if self.career_data is None:
-            return []
-        
-        question_lower = question.lower()
-        question_words = set(re.findall(r'\b\w+\b', question_lower))
-        
-        matches = []
-        
-        for idx, row in self.career_data.iterrows():
-            if pd.notna(row['question']) and pd.notna(row['answer']):
-                q_text = str(row['question']).lower()
-                a_text = str(row['answer']).lower()
-                
-                # Calculate match score
-                q_match = sum(1 for word in question_words if word in q_text)
-                a_match = sum(1 for word in question_words if word in a_text)
-                
-                total_score = q_match * 3 + a_match
-                
-                if total_score > 0:
-                    matches.append((total_score, row['question'], row['answer']))
-        
-        # Sort by score and return top matches
-        matches.sort(reverse=True, key=lambda x: x[0])
-        return [(q, a) for _, q, a in matches[:top_k]]
-
-    def _call_openai_direct(self, prompt):
-        """Make direct HTTP request to OpenAI API"""
-        if not self.api_key:
-            logger.error("❌ No API key available")
-            raise ValueError("OpenAI API key not available")
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
-        
-        data = {
-            "model": "gpt-4o-mini",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.3,
-            "max_tokens": 500
-        }
-        
+    # --- 2️⃣ Schema Management ---
+    def _check_and_create_schema(self):
+        """Ensure the schema (CareerKnowledge) exists"""
         try:
-            logger.info("🔄 Making OpenAI API request...")
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=30)
-            logger.info(f"📡 Response status: {response.status_code}")
-            
-            if response.status_code != 200:
-                logger.error(f"❌ API Error {response.status_code}: {response.text}")
-                response.raise_for_status()
-            
-            result = response.json()
-            return result["choices"][0]["message"]["content"].strip()
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ OpenAI API request failed: {e}")
-            raise
-        except KeyError as e:
-            logger.error(f"❌ Unexpected response format from OpenAI: {e}")
-            raise
+            class_name = "CareerKnowledge"
+            schema = self.client.collections.list_all()
 
-    def ask_question(self, question):
-        """Ask question with proper RAG using OpenAI"""
-        try:
-            if not self.is_initialized or self.career_data is None:
-                return {
-                    "answer": "Career guidance system is starting up. Please try again in a moment.",
-                    "confidence": "Low"
-                }
-
-            logger.info(f"🤔 Processing: {question}")
-
-            # Find relevant Q&A from your dataset
-            relevant_data = self._find_relevant_qa(question)
-            
-            if len(relevant_data) == 0:
-                return {
-                    "answer": "I don't have specific information about that topic. Please try asking about career paths, majors, skills, or education.",
-                    "confidence": "Low"
-                }
-
-            # Build context from your dataset
-            context = "RELEVANT CAREER GUIDANCE INFORMATION:\n\n"
-            for i, (q, a) in enumerate(relevant_data, 1):
-                # Clean the answers before sending to OpenAI
-                clean_a = self._clean_text_for_prompt(a)
-                context += f"{i}. Q: {q}\n   A: {clean_a}\n\n"
-
-            logger.info(f"🔍 Found {len(relevant_data)} relevant entries")
-
-            # Create optimized RAG prompt
-            prompt = f"""You are Career Compass, an expert career guidance advisor. Use the following career information from our database to provide a helpful, professional answer.
-
-{context}
-
-USER QUESTION: {question}
-
-IMPORTANT INSTRUCTIONS:
-- Provide specific, actionable career guidance based on the context above
-- Focus on being helpful and professional
-- Keep your answer concise (2-3 paragraphs maximum)
-- If the context doesn't fully address the question, provide general career advice
-- Use a warm, supportive tone
-- Structure your answer with clear paragraphs
-
-ANSWER:"""
-
-            # Use direct OpenAI API call
-            if self.api_key:
-                logger.info("🚀 Attempting to call OpenAI API...")
-                answer = self._call_openai_direct(prompt)
-                logger.info("✅ Successfully generated answer with OpenAI")
-                return {
-                    "answer": answer,
-                    "relevant_matches": len(relevant_data),
-                    "confidence": "High"
-                }
+            if class_name not in schema:
+                logger.info("📋 Creating Weaviate schema...")
+                self.client.collections.create(
+                    name=class_name,
+                    properties=[
+                        Property(name="question", data_type=DataType.TEXT),
+                        Property(name="answer", data_type=DataType.TEXT),
+                        Property(name="is_augmented", data_type=DataType.BOOL),
+                        Property(name="source", data_type=DataType.TEXT),
+                    ]
+                )
+                logger.info("✅ Schema created")
             else:
-                logger.error("❌ No API key available for OpenAI")
-                raise ValueError("OpenAI API key not available")
-            
+                logger.info("✅ Schema already exists")
+
+            return True
         except Exception as e:
-            logger.error(f"❌ RAG error: {e}")
-            logger.info("🔄 Falling back to dataset mode")
-            # Enhanced fallback
-            return self._get_enhanced_fallback(question, relevant_data)
+            logger.error(f"❌ Schema creation error: {e}")
+            return False
 
-    def _clean_text_for_prompt(self, text):
-        """Clean text before sending to OpenAI to improve response quality"""
-        if not text or pd.isna(text):
-            return ""
-        
-        # Remove URLs
-        text = re.sub(r'http\S+', '', text)
-        # Remove excessive whitespace
-        text = re.sub(r'\s+', ' ', text)
-        # Remove special formatting markers
-        text = re.sub(r'\[.*?\]', '', text)
-        text = re.sub(r'\(.*?\)', '', text)
-        
-        # Take first 150 words to avoid overly long context
-        words = text.split()[:150]
-        return ' '.join(words)
+    # --- 3️⃣ Initialize Data + Embeddings ---
+    def initialize_system(self, data_path):
+        """Initialize the complete RAG system"""
+        logger.info("🚀 Initializing Career Compass RAG...")
 
-    def _get_enhanced_fallback(self, question, relevant_data=None):
-        """Enhanced fallback when OpenAI fails"""
-        if relevant_data is None:
-            relevant_data = self._find_relevant_qa(question, top_k=2)
-        
-        if relevant_data:
-            # Use the best matching answer with cleaning
-            best_q, best_a = relevant_data[0]
-            clean_answer = self._clean_text_for_prompt(best_a)
-            
-            if len(clean_answer) > 50:
-                return {
-                    "answer": f"🎯 Based on career guidance information:\n\n{clean_answer}",
-                    "confidence": "Medium"
-                }
-        
-        # Default professional response
-        return {
-            "answer": "👋 I'm Career Compass! I specialize in helping students and professionals with career guidance, education paths, and skill development.\n\nPlease ask me about:\n• Career options and paths\n• College majors and degrees  \n• Skills development\n• Work preferences\n\nWhat career question can I help you with today?",
-            "confidence": "Medium"
-        }
+        if not self._initialize_weaviate_client():
+            logger.error("❌ Weaviate client init failed")
+            return False
+
+        if not self._check_and_create_schema():
+            logger.error("❌ Schema creation failed")
+            return False
+
+        try:
+            if not os.path.exists(data_path):
+                logger.error(f"❌ Data file not found: {data_path}")
+                return False
+                
+            df = pd.read_csv(data_path)
+            logger.info(f"📄 Loaded {len(df)} rows from CSV")
+        except Exception as e:
+            logger.error(f"❌ Failed to load data: {e}")
+            return False
+
+        # Chunk text
+        logger.info("✂️ Splitting text into token chunks...")
+        text_splitter = TokenTextSplitter(chunk_size=200, chunk_overlap=20)
+
+        documents = []
+        for _, row in df.iterrows():
+            chunks = text_splitter.split_text(row["answer"])
+            for chunk in chunks:
+                doc = Document(
+                    page_content=chunk,
+                    metadata={
+                        "question": row["question"],
+                        "answer": row["answer"],
+                        "is_augmented": False,
+                        "source": "career_compass_dataset"
+                    }
+                )
+                documents.append(doc)
+
+        logger.info(f"📝 Prepared {len(documents)} chunks")
+
+        # Embeddings
+        logger.info("🧠 Initializing embedding model...")
+        embedding_model = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+
+        # Vector store
+        logger.info("💾 Creating vector store in Weaviate...")
+        self.vectorstore = WeaviateVectorStore(
+            client=self.client,
+            index_name="CareerKnowledge",
+            text_key="answer",
+            embedding=embedding_model,
+            attributes=["question", "answer", "is_augmented", "source"]
+        )
+
+        # Add documents
+        batch_size = 100
+        for i in range(0, len(documents), batch_size):
+            self.vectorstore.add_documents(documents[i:i + batch_size])
+            logger.info(f"📤 Added {min(i + batch_size, len(documents))}/{len(documents)}")
+
+        logger.info("✅ All documents added successfully")
+        logger.info("🎉 Career Compass RAG is ready!")
+        return True
+
+    # --- 4️⃣ Ask a Question ---
+    def ask_question(self, question):
+        """Retrieve + Generate an answer using RAG"""
+        try:
+            if not self.vectorstore:
+                return {"answer": "System not initialized.", "confidence": "Error"}
+
+            results = self.vectorstore.similarity_search(query=question, k=5)
+
+            if not results:
+                return {"answer": "I don't have enough information.", "confidence": "Low"}
+
+            context = "\n".join([doc.page_content for doc in results])
+
+            prompt = f"""
+            You are Career Compass, a career guidance assistant.
+
+            Use the context below to answer the question.
+
+            Context:
+            {context}
+
+            Question: {question}
+            Answer:
+            """
+
+            llm_client = self._get_llm_client()
+            response = llm_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=300
+            )
+
+            final_answer = response.choices[0].message.content.strip()
+            return {
+                "answer": final_answer,
+                "retrieved_chunks": len(results),
+                "confidence": "High"
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error in ask_question: {e}")
+            return {"answer": f"Error: {e}", "confidence": "Error"}
+
+    # --- 5️⃣ Cleanup ---
+    def close_connection(self):
+        """Close connection to Weaviate"""
+        if self.client:
+            self.client.close()
+            logger.info("🔌 Connection closed.")
+
+
+if __name__ == "__main__":
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(base_dir, "final_merged_career_guidance.csv")
+
+    logger.info(f"📁 Looking for dataset at: {csv_path}")
+
+    system = CareerCompassWeaviate()
+    system.initialize_system(csv_path)
+    response = system.ask_question("What skills are important for AI engineers?")
+    logger.info(f"💡 Answer: {response['answer']}")
+    system.close_connection()
