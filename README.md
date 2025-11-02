@@ -160,7 +160,7 @@ Students can ask questions like:
    ```bash
    git clone <your-repo-url>
    cd CareerCompass
-
+```
 ---
 
 <p align="center">
