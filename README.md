@@ -3,7 +3,7 @@
 > 🚀 Empowering students to make smarter academic choices through Machine Learning and AI-powered guidance.
 
 <p align="center">
-  <img src="./assets/web_interface.png" width="800" alt="EduPath AI Web Interface"/>
+  <img src="web_interface.png.jpeg" width="800" alt="EduPath AI Web Interface"/>
 </p>
 
 <p align="center">
@@ -141,8 +141,8 @@ Students can ask questions like:
 
 ## 👩‍💻 Team  
 
-| Member | Role |
-|---------|------|
+| Member 
+|---------
 | **Amal Cheikh Ali** | 
 | **Maysam Al Obaidi** |
 | **Fadila Al Omar** | 
