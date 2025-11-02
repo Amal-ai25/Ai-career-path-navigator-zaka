@@ -154,7 +154,8 @@ Students can ask questions like:
 📂 **GitHub Repository:** https://github.com/Amal-ai25/Ai-career-path-navigator-zaka  
 🌐 **Live Demo (Render):** *(Coming Soon)*  
 
-## Setup Instructions
+
+## 🧷 Setup Instructions
 
  **Clone the repository**
    ```bash
